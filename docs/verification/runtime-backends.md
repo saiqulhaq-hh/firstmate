@@ -1883,7 +1883,9 @@ The real lifecycle smoke proved spawn, metadata, nested-subshell worktree discov
 
 ## Orca
 
-Verified 2026-10-07 on Linux (Omarchy OS) against `orca-ide` 1.4.221 (the live Linux Orca CLI shipped in the AppImage bundle). The captain's installed shim is `/home/chucky/.config/orca/linux-orca-cli-shim/orca`, which execs `/home/chucky/.cache/orca/appimage/launcher/orca-ide`. The firstmate adapter now prefers `orca-ide` over the shim and honors `ORCA_CLI_BIN_DIR` as a fallback appended to `PATH` so an explicit `orca-ide` wins.
+Verified 2026-10-07 on Linux (Omarchy OS) against `orca-ide` 1.4.221, the live Linux Orca CLI shipped in the AppImage bundle.
+The captain's installed shim is `/home/chucky/.config/orca/linux-orca-cli-shim/orca`, which execs `/home/chucky/.cache/orca/appimage/launcher/orca-ide`.
+The Firstmate adapter prefers `orca-ide`, then the supplied `ORCA_CLI_BIN_DIR` shim, and accepts a bare `orca` only after its status response proves it is Orca.
 
 ```sh
 orca-ide --version
@@ -1906,14 +1908,18 @@ result.startupTerminal.handle=<orca terminal handle>
 result.agentTerminalHandle=<orca terminal handle>
 ```
 
-`orca worktree create --agent <harness>` returns the agent terminal in `result.startupTerminal.handle` (live 1.4.221) and `result.agentTerminalHandle` (older runtimes); `orca terminal send` advertises both `--wait-submit <seconds>` (observe the accepted prompt without resending) and `--retry-request <id>` (reissue a prior prompt id after an ambiguous transport failure); `orca terminal wait --for tui-idle --timeout-ms <ms>` is the new tui-idle primitive that firstmate now uses as a capability-gated fast-path for the empty-composer verdict.
+`orca worktree create --agent <harness>` returns the agent terminal in `result.startupTerminal.handle` on live 1.4.221 and `result.agentTerminalHandle` on older runtimes.
+`orca terminal send` advertises both `--wait-submit <seconds>` to observe an accepted prompt without resending and `--retry-request <id>` to reissue a prior prompt id after an ambiguous transport failure.
+`orca terminal wait --for tui-idle --timeout-ms <ms>` is the tui-idle primitive that Firstmate uses when the terminal wait command advertises it.
 
 ```sh
 tests/fm-backend-orca.test.sh
 tests/fm-spawn-orca-worktree.test.sh
 ```
 
-The fake-Orca suite covers readiness, registration, create response parsing (now including `result.startupTerminal.handle` and `result.agentTerminalHandle`), metadata routing, popup-safe submit, the new `--agent` worktree path, the legacy shell-terminal fallback for harnesses without an Orca `--agent` id, capability-gated `--wait-submit`/`--retry-request`, capability-gated `terminal wait --for tui-idle`, the GNOME-orca refusal, and path-matched release refusal. `fm-spawn-orca-worktree.test.sh` proves the spawn passes `--agent` to `worktree create` for supported harnesses and records the agent terminal handle, falling back to a separate `terminal create` for harnesses whose Orca `--agent` is not recognised (muse, pi-signed, rovo, cursor, agy, devin).
+The fake-Orca suite covers readiness, registration, create response parsing (now including `result.startupTerminal.handle` and `result.agentTerminalHandle`), metadata routing, popup-safe submit, the native `--agent` worktree path, the shell-terminal fallback for harnesses without an Orca `--agent` id, capability-gated `--wait-submit`/`--retry-request`, capability-gated `terminal wait --for tui-idle`, the GNOME-orca refusal, and path-matched release refusal.
+`fm-spawn-orca-worktree.test.sh` proves a supported native agent receives its launch brief as an agent prompt without shell bootstrap commands.
+It also proves a harness without an Orca `--agent` id falls back to one separate shell terminal.
 
 ## cmux
 

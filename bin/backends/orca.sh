@@ -12,38 +12,29 @@
 # shellcheck source=bin/fm-composer-lib.sh
 . "$(dirname -- "${BASH_SOURCE[0]}")/../fm-composer-lib.sh"
 
-# fm_backend_orca_bin: the absolute path to the resolved Orca CLI. Every helper
-# that talks to Orca reads this so the precedence rule (orca-ide > orca, with
-# ORCA_CLI_BIN_DIR appended as a fallback) is owned once. The first call writes
-# the cache; later calls return the cached value without re-running the probe.
-# FM_BACKEND_ORCA_BIN takes precedence and lets tests pin a fake binary
-# without touching PATH. The live host's ORCA_CLI_BIN_DIR
-# (/home/chucky/.config/orca/linux-orca-cli-shim) holds an `orca` shim that
-# exec's the AppImage; the Linux orca-cli-shim convention is to APPEND that
-# dir to PATH so an explicit `orca-ide` (often on the user's PATH) wins.
+# fm_backend_orca_bin: resolve the Orca CLI for this invocation. An explicit
+# orca-ide wins, then the supplied Linux shim, then a bare `orca` only when its
+# status response proves it is Orca rather than the GNOME screen reader.
 fm_backend_orca_bin() {
-  if [ -n "${FM_BACKEND_ORCA_BIN:-}" ]; then
-    printf '%s\n' "$FM_BACKEND_ORCA_BIN"
-    return 0
-  fi
-  local path_dir candidate status_out
-  path_dir="$PATH"
-  if [ -n "${ORCA_CLI_BIN_DIR:-}" ] && [ -d "$ORCA_CLI_BIN_DIR" ]; then
-    path_dir="$path_dir:$ORCA_CLI_BIN_DIR"
-  fi
-  candidate=$(PATH="$path_dir" command -v orca-ide 2>/dev/null) || candidate=
+  local candidate status_out
+  candidate=$(command -v orca-ide 2>/dev/null) || candidate=
   if [ -n "$candidate" ] && [ -x "$candidate" ]; then
-    FM_BACKEND_ORCA_BIN=$candidate
-    export FM_BACKEND_ORCA_BIN
     printf '%s\n' "$candidate"
     return 0
   fi
-  candidate=$(PATH="$path_dir" command -v orca 2>/dev/null) || candidate=
+  if [ -n "${ORCA_CLI_BIN_DIR:-}" ] && [ -d "$ORCA_CLI_BIN_DIR" ] &&
+    [ -x "$ORCA_CLI_BIN_DIR/orca" ]; then
+    candidate="$ORCA_CLI_BIN_DIR/orca"
+    status_out=$("$candidate" status --json 2>/dev/null) || status_out=
+    if [ -n "$status_out" ] && printf '%s' "$status_out" | grep -q '"runtime"'; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  fi
+  candidate=$(command -v orca 2>/dev/null) || candidate=
   if [ -n "$candidate" ] && [ -x "$candidate" ]; then
     status_out=$("$candidate" status --json 2>/dev/null) || status_out=
     if [ -n "$status_out" ] && printf '%s' "$status_out" | grep -q '"runtime"'; then
-      FM_BACKEND_ORCA_BIN=$candidate
-      export FM_BACKEND_ORCA_BIN
       printf '%s\n' "$candidate"
       return 0
     fi
@@ -51,21 +42,20 @@ fm_backend_orca_bin() {
   return 1
 }
 
-# fm_backend_orca_feature: yes/no capability check against the resolved CLI's
-# own --help. Cached per flag name for a process lifetime; FM_BACKEND_ORCA_FEATURES_FORCE
-# overrides the verdict for tests (1=capable, 0=incapable) without probing
-# the real binary. Older hosts that lack the flag fail closed to the legacy
-# code path; this is the only place the runtime backend asks "is the feature
-# here?" - every consumer calls this and branches on yes/no.
-fm_backend_orca_feature() {  # <flag-name>
-  local flag=$1 bin help_text
-  case "${FM_BACKEND_ORCA_FEATURES_FORCE:-}" in
-    1) return 0 ;;
-    0) return 1 ;;
-  esac
+# fm_backend_orca_feature: yes/no capability check against the subcommand that
+# owns it. Older hosts that lack a flag fail closed to the existing safe path.
+fm_backend_orca_feature() {  # <send|wait> <flag-name>
+  local surface=$1 flag=$2 bin help_text
   bin=$(fm_backend_orca_bin) || return 1
-  help_text=$("$bin" --help 2>&1) || return 1
-  printf '%s\n' "$help_text" | grep -Eq -- "[[:space:]]${flag}[[:space:]<]"
+  case "$surface" in
+    send) help_text=$("$bin" terminal send --help 2>&1) || return 1 ;;
+    wait) help_text=$("$bin" terminal wait --help 2>&1) || return 1 ;;
+    *) return 1 ;;
+  esac
+  case "$flag" in
+    tui-idle) printf '%s\n' "$help_text" | grep -Eq -- "[[:space:]<]${flag}[[:space:]<>]" ;;
+    *) printf '%s\n' "$help_text" | grep -Eq -- "[[:space:]]${flag}[[:space:]<>]" ;;
+  esac
 }
 
 fm_backend_orca_tool_check() {
@@ -117,7 +107,8 @@ process.exit(1);
 fm_backend_orca_wait_tui_idle() {  # <terminal-id> <timeout-ms>
   local terminal=$1 timeout_ms=${2:-30000} bin
   fm_backend_orca_tool_check || return 1
-  if ! fm_backend_orca_feature --wait-submit >/dev/null 2>&1; then
+  if ! fm_backend_orca_feature wait --for >/dev/null 2>&1 ||
+    ! fm_backend_orca_feature wait tui-idle >/dev/null 2>&1; then
     return 2
   fi
   bin=$(fm_backend_orca_bin)
@@ -272,7 +263,7 @@ fm_backend_orca_send_text_line_watch() {  # <terminal-id> <text>
   local terminal=$1 text=$2 out bin
   fm_backend_orca_tool_check || return 1
   bin=$(fm_backend_orca_bin)
-  if fm_backend_orca_feature --wait-submit >/dev/null 2>&1; then
+  if fm_backend_orca_feature send --wait-submit >/dev/null 2>&1; then
     out=$("$bin" terminal send --terminal "$terminal" --text "$text" --enter --wait-submit 1 --json) || return 1
   else
     out=$("$bin" terminal send --terminal "$terminal" --text "$text" --enter --json) || return 1
@@ -296,7 +287,7 @@ fm_backend_orca_send_retry() {  # <terminal-id> <text> <request-id>
   local terminal=$1 text=$2 req_id=$3 bin
   fm_backend_orca_tool_check || return 1
   bin=$(fm_backend_orca_bin)
-  if [ -n "$req_id" ] && fm_backend_orca_feature --retry-request >/dev/null 2>&1; then
+  if [ -n "$req_id" ] && fm_backend_orca_feature send --retry-request >/dev/null 2>&1; then
     "$bin" terminal send --terminal "$terminal" --text "$text" --enter --retry-request "$req_id" --json
   else
     "$bin" terminal send --terminal "$terminal" --text "$text" --enter --json
@@ -385,17 +376,17 @@ fm_backend_orca_composer_caps() {
 # shared verdict out. Every shape (bordered boxes AND the borderless bare-glyph
 # row this adapter never learned, which left every claude/codex/pi/muse steer
 # unconfirmed) lives in bin/fm-composer-lib.sh. On hosts that expose
-# `terminal wait --for tui-idle`, a settled TUI short-circuits the read into
-# an `empty` verdict without polling; older hosts (and any wait error that
-# does not look like a settled receipt) fall back to the read-and-classify
-# path unchanged, so the safety contract on the existing `pending`/`unknown`
-# verdicts is preserved.
+# `terminal wait --for tui-idle`, a settled TUI confirms an otherwise-empty
+# read without another polling pass; older hosts (and any wait error that does
+# not look like a settled receipt) keep the read-and-classify path unchanged,
+# so the safety contract on the existing `pending`/`unknown` verdicts is
+# preserved.
 fm_backend_orca_composer_state() {  # <terminal-id> [expected-label] -> empty|pending|pending-unproven|unknown
   local cap verdict
   cap=$(fm_backend_orca_composer_capture "$1") || { printf 'unknown'; return 0; }
   verdict=$(fm_composer_classify_screen "$(fm_backend_orca_composer_caps)" "$cap")
   [ "$verdict" != need-identity ] || verdict=unknown
-  if [ "$verdict" = empty ] && [ -n "${FM_COMPOSER_TUI_IDLE_FASTPATH:-1}" ]; then
+  if [ "$verdict" = empty ]; then
     if fm_backend_orca_wait_tui_idle "$1" 200 >/dev/null 2>&1; then
       printf 'empty'
       return 0
@@ -432,19 +423,17 @@ fm_backend_orca_send_key() {  # <terminal-id> <key>
 fm_backend_orca_send_text_submit() {  # <terminal-id> <text> <retries> <enter-sleep> <settle>
   local terminal=$1 text=$2 retries=$3 sleep_s=$4 settle=$5 req_id state i=0
   fm_backend_orca_tool_check || { printf 'send-failed'; return 0; }
-  if fm_backend_orca_feature --wait-submit >/dev/null 2>&1; then
+  if fm_backend_orca_feature send --wait-submit >/dev/null 2>&1; then
     req_id=$(fm_backend_orca_send_text_line_watch "$terminal" "$text") || {
       printf 'send-failed'
       return 0
     }
-    FM_BACKEND_ORCA_LAST_REQUEST_ID=$req_id
-    export FM_BACKEND_ORCA_LAST_REQUEST_ID
     sleep "$settle"
     while [ "$i" -lt "$retries" ]; do
       state=$(fm_backend_orca_composer_state "$terminal")
       case "$state" in
         pending|pending-unproven)
-          if [ -n "$req_id" ] && fm_backend_orca_feature --retry-request >/dev/null 2>&1; then
+          if [ -n "$req_id" ] && fm_backend_orca_feature send --retry-request >/dev/null 2>&1; then
             fm_backend_orca_send_retry "$terminal" "$text" "$req_id" >/dev/null 2>&1 || true
           else
             fm_backend_orca_send_key "$terminal" Enter >/dev/null 2>&1 || true

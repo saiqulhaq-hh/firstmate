@@ -44,6 +44,14 @@ make_orca_fakebin() {
 #!/usr/bin/env bash
 set -u
 DIR="${FM_TEST_ORCA_DIR:?}"
+LOG="${FM_TEST_ORCA_LOG:-}"
+if [ -n "$LOG" ]; then
+  {
+    printf 'orca'
+    for a in "$@"; do printf '\x1f%s' "$a"; done
+    printf '\n'
+  } >> "$LOG"
+fi
 case "$1 $2" in
   "status --json")
     printf '{"ok":true,"result":{"runtime":{"reachable":true,"state":"ready"}}}\n'
@@ -186,7 +194,7 @@ EOF
 # record the agent terminal handle - not call terminal_create separately.
 # That is the "only one worker terminal" contract.
 test_orca_spawn_passes_agent_and_creates_only_one_terminal() {
-  local case_dir home id=orca-agent-spawn fb out status wt_recorded terminal
+  local case_dir home id=orca-agent-spawn fb log out status wt_recorded terminal
   case_dir="$TMP_ROOT/agent-spawn"
   home="$case_dir/home"
   mkdir -p "$home/data" "$home/projects" "$home/state" "$home/config"
@@ -204,10 +212,12 @@ Confirm the spawn passes --agent to worktree create for a supported harness.
 The spawn must record the agent terminal handle.
 EOF
   fb=$(make_orca_fakebin "$case_dir")
+  log="$case_dir/orca.log"
+  : > "$log"
   out=$(FM_ROOT_OVERRIDE='' FM_HOME="$home" HOME="$case_dir/user-home" \
     FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
     FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
-    FM_SPAWN_NO_GUARD=1 FM_TEST_ORCA_DIR="$case_dir" PATH="$fb:$PATH" \
+    FM_SPAWN_NO_GUARD=1 FM_TEST_ORCA_DIR="$case_dir" FM_TEST_ORCA_LOG="$log" PATH="$fb:$PATH" \
     "$SPAWN" "$id" "$case_dir/project" --mode no-mistakes --yolo off --backend orca 2>&1)
   status=$?
   expect_code 0 "$status" "an Orca-backed spawn with --agent should succeed"$'\n'"$out"
@@ -220,7 +230,15 @@ EOF
     term-*) : ;;
     *) fail "expected agent terminal handle (term-*); got '$terminal'" ;;
   esac
-  pass "fm-spawn --backend orca: passes --agent to worktree create and records the agent terminal"
+  assert_contains "$(cat "$log")" $'orca\x1f''terminal'$'\x1f''send'$'\x1f''--terminal'$'\x1f'"$terminal"$'\x1f''--text'$'\x1f''Read and follow the launch brief at ' \
+    "native Orca agent did not receive the launch brief as an agent prompt"
+  assert_not_contains "$(cat "$log")" $'\x1f''--text'$'\x1f''cd -- ' \
+    "native Orca agent must not receive a shell cd command"
+  assert_not_contains "$(cat "$log")" $'\x1f''--text'$'\x1f''export ' \
+    "native Orca agent must not receive shell exports"
+  assert_not_contains "$(cat "$log")" $'\x1f''--text'$'\x1f''. /tmp/' \
+    "native Orca agent must not receive a staged shell launch"
+  pass "fm-spawn --backend orca: prompts the single native agent with its launch brief"
 }
 
 # test_orca_spawn_falls_back_to_shell_terminal_for_unsupported_harness:

@@ -17,13 +17,9 @@ The harness is the agent process launched inside that endpoint, such as `claude`
 Load `harness-adapters` for harness-specific launch, interrupt, resume, trust-dialog, and skill-invocation facts.
 
 Implementation details, metadata fields, teardown guarantees, and limitations live in `docs/orca-backend.md`.
-`docs/verification/runtime-backends.md` "Orca" owns active smoke evidence (refreshed 2026-10-07 against `orca-ide` 1.4.221 on the captain's Linux host).
+`docs/verification/runtime-backends.md` "Orca" owns active smoke evidence.
 Prefer the `bin/fm-*` helpers over raw `orca` or `orca-ide` commands.
 Use raw `orca-ide` only when the helper surface cannot answer the inspection question, and keep the recorded firstmate metadata as the task identity.
-
-## Preflight
-
-The adapter prefers `orca-ide` over the legacy `orca` shim and honors `ORCA_CLI_BIN_DIR` as a fallback appended to `PATH` (the Linux orca-cli-shim convention is to put `~/.config/orca/linux-orca-cli-shim` on PATH; the firstmate adapter reads it explicitly). A bare `orca` resolving to the GNOME screen reader is refused at the status probe, so a firstmate that fails its runtime check on a Linux host with both the GNOME orca and the Orca AppImage on PATH points at exactly that ambiguity. On macOS, the brew-installed `orca` is the same binary the shim exec's, and the legacy `orca` name continues to work; Linux hosts should install or symlink `orca-ide` so firstmate resolves it directly.
 
 ## Preflight
 

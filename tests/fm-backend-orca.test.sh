@@ -60,9 +60,7 @@ if [ "${1:-}" = status ] && [ "${FM_ORCA_STATUS_RESPONSE:-ready}" != sequence ];
   printf '{"ok":true,"result":{"runtime":{"reachable":true,"state":"ready"}}}\n'
   exit 0
 fi
-# Help text surface the capability probe (fm_backend_orca_feature) reads.
-# Tests that need a host without --wait-submit or --retry-request delete the
-# relevant --<flag> line by writing FM_BACKEND_ORCA_FEATURES_FORCE=0.
+# The root command deliberately does not advertise subcommand-only features.
 if [ "${1:-}" = "--help" ]; then
   cat <<HELP
 orca - Orca CLI
@@ -70,10 +68,23 @@ orca - Orca CLI
 Usage: orca <command> [options]
 
 Options:
-  --wait-submit <seconds>   Wait for accepted prompt
-  --retry-request <id>      Retry a prior prompt by id
   --help                    Show help
 HELP
+  exit 0
+fi
+if [ "${1:-} ${2:-} ${3:-}" = "terminal send --help" ]; then
+  case "${FM_ORCA_SEND_FEATURES:-wait-submit,retry-request}" in
+    *wait-submit*) printf '  --wait-submit <seconds>   Wait for accepted prompt\n' ;;
+  esac
+  case "${FM_ORCA_SEND_FEATURES:-wait-submit,retry-request}" in
+    *retry-request*) printf '  --retry-request <id>      Retry a prior prompt by id\n' ;;
+  esac
+  exit 0
+fi
+if [ "${1:-} ${2:-} ${3:-}" = "terminal wait --help" ]; then
+  case "${FM_ORCA_WAIT_FEATURES:-tui-idle}" in
+    *tui-idle*) printf '  --for <tui-idle>             Wait for a settled TUI\n' ;;
+  esac
   exit 0
 fi
 n=$next
@@ -90,11 +101,9 @@ SH
   cat > "$fb/orca" <<'SH'
 #!/usr/bin/env bash
 set -u
-# The orca shim exec's the AppImage. Tests that want a bare-orca path use
-# FM_BACKEND_ORCA_FEATURES_FORCE=0 plus a fake orca, not this delegation; we
-# keep the orca binary in the fakebin so command -v orca succeeds there and
-# the legacy "orca in PATH" path also resolves to a stub for the no-ide
-# legacy case.
+# The orca shim exec's the AppImage.
+# Keeping the bare name in the fakebin lets resolver tests exercise its
+# validated fallback after removing `orca-ide`.
 exec "$0/orca-ide" "$@"
 SH
   chmod +x "$fb/orca"
@@ -282,7 +291,7 @@ test_send_text_submit_falls_back_to_enter_on_hosts_without_retry_request() {
   printf '{"ok":true,"result":{"terminal":{"tail":["╭─────────────────╮","│ > hello captain │","╰─────────────────╯"]}}}\n' > "$RESP/2.out"
   printf '{"ok":true,"result":{"send":{"handle":"term-123","accepted":true}}}\n' > "$RESP/3.out"
   printf '{"ok":true,"result":{"terminal":{"tail":["╭─────────────────╮","│ >               │","╰─────────────────╯"]}}}\n' > "$RESP/4.out"
-  out=$( FM_BACKEND_ORCA_FEATURES_FORCE=0 PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
+  out=$( FM_ORCA_SEND_FEATURES=wait-submit PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
     bash -c '. "$0/bin/backends/orca.sh"; fm_backend_orca_send_text_submit term-123 "hello captain" 3 0.01 0.01' "$ROOT" )
   [ "$out" = empty ] || fail "send_text_submit on a no-capability host should retry Enter, got '$out'"
   log_text=$(cat "$LOG")
@@ -584,7 +593,7 @@ test_spawn_preserves_orca_metadata_when_pathless_worktree_cleanup_fails() {
   printf '{"ok":true,"result":{"worktree":{"id":"wt-pathless-cleanup::/orca/wt-pathless-cleanup"}}}\n' > "$RESP/3.out"
   printf '{"ok":false,"error":{"code":"worktree_not_removed","message":"worktree not removed"}}\n' > "$RESP/4.out"
   printf '{"ok":false,"error":{"code":"worktree_not_removed","message":"worktree not removed"}}\n' > "$RESP/5.out"
-  out=$( HOME="$SPAWN_HOME" CLAUDE_CONFIG_DIR='' PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
+  out=$( HOME="$SPAWN_HOME" XDG_CONFIG_HOME="$SPAWN_HOME/.config" XDG_DATA_HOME="$SPAWN_HOME/.local/share" CLAUDE_CONFIG_DIR='' PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
     FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$config" \
     FM_PROJECTS_OVERRIDE="$TMP_ROOT/unused-projects" FM_SPAWN_NO_GUARD=1 \
     "$ROOT/bin/fm-spawn.sh" "$id" "$proj" claude --mode no-mistakes --yolo off --backend orca 2>&1 )
@@ -602,8 +611,8 @@ test_spawn_preserves_orca_metadata_when_pathless_worktree_cleanup_fails() {
   pass "fm-spawn.sh --backend orca: preserves metadata when pathless cleanup fails"
 }
 
-test_spawn_writes_orca_metadata_and_launches_harness() {
-  local proj wt data state config id out log staged launch
+test_spawn_writes_orca_metadata_and_prompts_native_agent() {
+  local proj wt data state config id out log
   id="orcaspawnz1"
   proj="$TMP_ROOT/spawn-project"
   wt="$TMP_ROOT/spawn-wt"
@@ -619,7 +628,7 @@ test_spawn_writes_orca_metadata_and_launches_harness() {
   printf '1\n' > "$RESP/1.exit"
   printf '{"ok":true,"result":{"repo":{"id":"repo-spawn"}}}\n' > "$RESP/2.out"
   printf '{"ok":true,"result":{"worktree":{"id":"wt-spawn::/orca/wt-spawn","path":"%s"},"terminal":{"handle":"term-spawn"}}}\n' "$wt" > "$RESP/3.out"
-  out=$( HOME="$SPAWN_HOME" CLAUDE_CONFIG_DIR='' PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
+  out=$( HOME="$SPAWN_HOME" XDG_CONFIG_HOME="$SPAWN_HOME/.config" XDG_DATA_HOME="$SPAWN_HOME/.local/share" CLAUDE_CONFIG_DIR='' PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
     FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$config" \
     FM_PROJECTS_OVERRIDE="$TMP_ROOT/unused-projects" FM_SPAWN_NO_GUARD=1 \
     "$ROOT/bin/fm-spawn.sh" "$id" "$proj" claude --mode no-mistakes --yolo off --backend orca 2>&1 )
@@ -633,17 +642,13 @@ test_spawn_writes_orca_metadata_and_launches_harness() {
   assert_grep "worktree=$wt" "$state/$id.meta" "meta missing Orca worktree path"
   assert_not_contains "$(cat "$log")" $'orca\x1f''terminal'$'\x1f''create' \
     "spawn should reuse the implicit terminal returned by Orca worktree creation"
-  assert_contains "$(cat "$log")" $'orca\x1f''terminal'$'\x1f''send'$'\x1f''--terminal'$'\x1f''term-spawn'$'\x1f''--text'$'\x1f''export GOTMPDIR=/tmp/fm-orcaspawnz1/gotmp'$'\x1f''--enter'$'\x1f''--json' \
-    "spawn did not export GOTMPDIR through the Orca terminal"
-  staged=$(tr '\037' '\n' < "$log" | sed -n "s/^\. '\([^']*\)'$/\1/p" | tail -1)
-  [ -n "$staged" ] && [ -f "$staged" ] \
-    || fail "spawn did not send Orca a readable staged launch command"
-  launch=$(cat "$staged")
-  add_dirs="--add-dir '$(cd "$state" && pwd -P)/operational-inbox' --add-dir '$(cd "$state" && pwd -P)/$id.inbox' --add-dir '$(cd "$data" && pwd -P)/$id' --add-dir '$(cd "$ROOT" && pwd -P)/.agents/skills'"
-  assert_contains "$launch" "CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 claude --dangerously-skip-permissions $add_dirs --settings '{\"feedbackDrafts\":\"off\",\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false}}'" \
-    "the staged launch sent through Orca did not select the Claude harness"
-  rm -rf "/tmp/fm-$id" "$(dirname "$staged")"
-  pass "fm-spawn.sh --backend orca: reuses implicit terminal, records metadata, launches harness"
+  assert_contains "$(cat "$log")" $'orca\x1f''terminal'$'\x1f''send'$'\x1f''--terminal'$'\x1f''term-spawn'$'\x1f''--text'$'\x1f''Read and follow the launch brief at ' \
+    "spawn did not deliver the launch brief as an Orca agent prompt"
+  assert_not_contains "$(cat "$log")" $'\x1f''--text'$'\x1f''export ' \
+    "spawn must not send shell exports into a native agent terminal"
+  assert_not_contains "$(cat "$log")" $'\x1f''--text'$'\x1f''. /tmp/' \
+    "spawn must not send a staged shell launch into a native agent terminal"
+  pass "fm-spawn.sh --backend orca: records metadata and prompts the native agent"
 }
 
 test_spawn_refuses_orca_secondmate_before_home_mutation() {
@@ -745,21 +750,23 @@ test_spawn_removes_orca_worktree_when_terminal_create_fails() {
   config="$TMP_ROOT/terminal-fail-config"
   fm_git_worktree "$proj" "$wt" "fm/$id"
   mkdir -p "$data/$id" "$state" "$config"
+  mkdir -p "$SPAWN_HOME/.config/muse"
+  printf '{"apiKey":"test-key"}\n' > "$SPAWN_HOME/.config/muse/auth.json"
   write_spawn_brief "$data" "$id"
   touch "$state/.last-watcher-beat"
   orca_case terminal-fail
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$FB/muse"
+  chmod +x "$FB/muse"
   printf '1\n' > "$RESP/1.exit"
   printf '{"ok":true,"result":{"repo":{"id":"repo-terminal-fail"}}}\n' > "$RESP/2.out"
   printf '{"ok":true,"result":{"worktree":{"id":"wt-terminal-fail::/orca/wt-terminal-fail","path":"%s"}}}\n' "$wt" > "$RESP/3.out"
   printf '1\n' > "$RESP/4.exit"
-  # Harness claude + FM_BACKEND_ORCA_USE_AGENT=0 forces the legacy
-  # shell-terminal create path so the terminal_create failure cleanup
-  # still applies (the --agent path now refuses terminal_create separately
-  # because the agent handle is expected to be returned by worktree create).
-  out=$( HOME="$SPAWN_HOME" CLAUDE_CONFIG_DIR='' PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
+  # Muse has no Orca-native agent, so it legitimately takes the shell-terminal
+  # creation path exercised by this cleanup test.
+  out=$( HOME="$SPAWN_HOME" XDG_CONFIG_HOME="$SPAWN_HOME/.config" XDG_DATA_HOME="$SPAWN_HOME/.local/share" CLAUDE_CONFIG_DIR='' PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
     FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$config" \
-    FM_PROJECTS_OVERRIDE="$TMP_ROOT/unused-projects" FM_SPAWN_NO_GUARD=1 FM_BACKEND_ORCA_USE_AGENT=0 \
-    "$ROOT/bin/fm-spawn.sh" "$id" "$proj" claude --mode no-mistakes --yolo off --backend orca 2>&1 )
+    FM_PROJECTS_OVERRIDE="$TMP_ROOT/unused-projects" FM_SPAWN_NO_GUARD=1 \
+    "$ROOT/bin/fm-spawn.sh" "$id" "$proj" muse --mode no-mistakes --yolo off --backend orca 2>&1 )
   status=$?
   [ "$status" -ne 0 ] || fail "Orca spawn should fail when terminal creation fails"
   assert_absent "$state/$id.meta" "terminal-create abort should not record metadata after successful cleanup"
@@ -816,18 +823,22 @@ test_spawn_releases_orca_resources_when_metadata_write_fails() {
   config="$TMP_ROOT/meta-fail-config"
   fm_git_worktree "$proj" "$wt" "fm/$id"
   mkdir -p "$data/$id" "$state/$id.meta" "$config"
+  mkdir -p "$SPAWN_HOME/.config/muse"
+  printf '{"apiKey":"test-key"}\n' > "$SPAWN_HOME/.config/muse/auth.json"
   write_spawn_brief "$data" "$id"
   orca_case meta-fail
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$FB/muse"
+  chmod +x "$FB/muse"
   printf '1\n' > "$RESP/1.exit"
   printf '{"ok":true,"result":{"repo":{"id":"repo-meta-fail"}}}\n' > "$RESP/2.out"
   printf '{"ok":true,"result":{"worktree":{"id":"wt-meta-fail::/orca/wt-meta-fail","path":"%s"}}}\n' "$wt" > "$RESP/3.out"
   printf '{"ok":true,"result":{"terminal":{"handle":"term-meta-fail"}}}\n' > "$RESP/4.out"
-  # Force the legacy shell-terminal create path so the recorded terminal
-  # is the separate shell terminal this test is asserting about.
-  out=$( HOME="$SPAWN_HOME" CLAUDE_CONFIG_DIR='' PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
+  # Muse has no Orca-native agent, so it legitimately receives the separate
+  # shell terminal whose later cleanup this test asserts.
+  out=$( HOME="$SPAWN_HOME" XDG_CONFIG_HOME="$SPAWN_HOME/.config" XDG_DATA_HOME="$SPAWN_HOME/.local/share" CLAUDE_CONFIG_DIR='' PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
     FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$config" \
-    FM_PROJECTS_OVERRIDE="$TMP_ROOT/unused-projects" FM_SPAWN_NO_GUARD=1 FM_BACKEND_ORCA_USE_AGENT=0 \
-    "$ROOT/bin/fm-spawn.sh" "$id" "$proj" claude --mode no-mistakes --yolo off --backend orca 2>&1 )
+    FM_PROJECTS_OVERRIDE="$TMP_ROOT/unused-projects" FM_SPAWN_NO_GUARD=1 \
+    "$ROOT/bin/fm-spawn.sh" "$id" "$proj" muse --mode no-mistakes --yolo off --backend orca 2>&1 )
   status=$?
   [ "$status" -ne 0 ] || fail "Orca spawn should fail when metadata cannot be written"
   assert_contains "$out" "task record for $id could not be published" \
@@ -1460,7 +1471,7 @@ test_json_get_ignores_undocumented_terminal_id_shapes
 test_worktree_and_terminal_helpers_parse_json
 test_worktree_create_removes_worktree_when_path_missing
 test_spawn_preserves_orca_metadata_when_pathless_worktree_cleanup_fails
-test_spawn_writes_orca_metadata_and_launches_harness
+test_spawn_writes_orca_metadata_and_prompts_native_agent
 test_spawn_refuses_orca_secondmate_before_home_mutation
 test_spawn_refuses_orca_when_runtime_not_ready
 test_spawn_refuses_orca_nonisolated_worktree
@@ -1500,13 +1511,17 @@ test_orca_tool_check_prefers_orca_ide_when_present() {
 }
 
 test_orca_tool_check_honors_orca_cli_bin_dir_when_orca_ide_missing() {
+  local shim bin
   orca_case shim-only
-  # The shim dir contains only `orca` (the AppImage launcher). Confirm the
-  # resolver falls through to it and accepts the AppImage response shape.
-  out=$( PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
-    bash -c '. "$0/bin/backends/orca.sh"; fm_backend_orca_runtime_check' "$ROOT" 2>&1 )
-  [ -z "$out" ] || fail "runtime_check on the shim should be quiet, got '$out'"
-  pass "fm_backend_orca_runtime_check: accepts a shim that exec's the AppImage and returns the Orca shape"
+  shim="$CASE_DIR/shim"
+  mkdir -p "$shim"
+  cp "$FB/orca-ide" "$shim/orca"
+  chmod +x "$shim/orca"
+  rm "$FB/orca-ide"
+  bin=$( PATH="$FB:/usr/bin:/bin" ORCA_CLI_BIN_DIR="$shim" \
+    bash -c '. "$0/bin/backends/orca.sh"; fm_backend_orca_bin' "$ROOT" )
+  [ "$bin" = "$shim/orca" ] || fail "resolver should select the supplied shim after orca-ide is absent, got '$bin'"
+  pass "fm_backend_orca_bin: uses ORCA_CLI_BIN_DIR before a bare orca fallback"
 }
 
 test_orca_tool_check_refuses_gnome_orca_stub() {
@@ -1538,27 +1553,15 @@ SH
   pass "fm_backend_orca_runtime_check: refuses a bare orca whose status returns no Orca JSON shape"
 }
 
-test_orca_feature_probe_reads_cli_help() {
+test_orca_feature_probe_reads_owning_command_help() {
   orca_case feature-probe
-  if PATH="$FB:$PATH" \
-    bash -c '. "$0/bin/backends/orca.sh"; fm_backend_orca_feature --wait-submit' "$ROOT"; then
-    pass "fm_backend_orca_feature: --wait-submit is detected from the resolved CLI's --help"
+  if PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
+    bash -c '. "$0/bin/backends/orca.sh"; fm_backend_orca_feature send --wait-submit' "$ROOT"; then
+    assert_contains "$(cat "$LOG")" $'orca\x1f''terminal'$'\x1f''send'$'\x1f''--help' \
+      "feature probe did not query terminal send help"
+    pass "fm_backend_orca_feature: --wait-submit is detected from terminal send help"
   else
     fail "fm_backend_orca_feature: --wait-submit should be detected"
-  fi
-}
-
-test_orca_feature_force_override_skips_probe() {
-  orca_case feature-force
-  if FM_BACKEND_ORCA_FEATURES_FORCE=0 PATH="$FB:$PATH" \
-    bash -c '. "$0/bin/backends/orca.sh"; fm_backend_orca_feature --wait-submit' "$ROOT"; then
-    fail "FM_BACKEND_ORCA_FEATURES_FORCE=0 should fail closed"
-  fi
-  if FM_BACKEND_ORCA_FEATURES_FORCE=1 PATH="$FB:$PATH" \
-    bash -c '. "$0/bin/backends/orca.sh"; fm_backend_orca_feature --wait-submit' "$ROOT"; then
-    pass "fm_backend_orca_feature: FM_BACKEND_ORCA_FEATURES_FORCE=1 wins without probing"
-  else
-    fail "FM_BACKEND_ORCA_FEATURES_FORCE=1 should succeed"
   fi
 }
 
@@ -1606,24 +1609,36 @@ test_orca_worktree_create_passes_agent_flag() {
   pass "fm_backend_orca_worktree_create: passes --agent and reads result.startupTerminal.handle"
 }
 
-test_orca_wait_tui_idle_falls_back_when_no_flag() {
+test_orca_wait_tui_idle_falls_back_when_unavailable() {
   orca_case wait-tui-no
   set +e
-  FM_BACKEND_ORCA_FEATURES_FORCE=0 PATH="$FB:$PATH" \
+  FM_ORCA_WAIT_FEATURES=none PATH="$FB:$PATH" \
     bash -c '. "$0/bin/backends/orca.sh"; fm_backend_orca_wait_tui_idle term-123 100' "$ROOT"
   status=$?
   set -e
-  [ "$status" -eq 2 ] || fail "wait_tui_idle should return 2 when --wait-submit is not advertised, got '$status'"
-  pass "fm_backend_orca_wait_tui_idle: returns 2 (no capability) when --wait-submit is not advertised"
+  [ "$status" -eq 2 ] || fail "wait_tui_idle should return 2 when tui-idle is not advertised, got '$status'"
+  pass "fm_backend_orca_wait_tui_idle: returns 2 (no capability) when tui-idle is not advertised"
+}
+
+test_orca_wait_tui_idle_uses_terminal_wait_when_available() {
+  local out
+  orca_case wait-tui-yes
+  printf '{"ok":true,"result":{"state":"tui-idle"}}\n' > "$RESP/1.out"
+  out=$( PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
+    bash -c '. "$0/bin/backends/orca.sh"; fm_backend_orca_wait_tui_idle term-123 100' "$ROOT" )
+  assert_contains "$out" 'tui-idle' "wait_tui_idle should return the native wait receipt"
+  assert_contains "$(cat "$LOG")" $'orca\x1f''terminal'$'\x1f''wait'$'\x1f''--terminal'$'\x1f''term-123'$'\x1f''--for'$'\x1f''tui-idle'$'\x1f''--timeout-ms'$'\x1f''100'$'\x1f''--json' \
+    "wait_tui_idle did not call terminal wait --for tui-idle"
+  pass "fm_backend_orca_wait_tui_idle: uses terminal wait --for tui-idle when advertised"
 }
 
 test_orca_tool_check_prefers_orca_ide_when_present
 test_orca_tool_check_honors_orca_cli_bin_dir_when_orca_ide_missing
 test_orca_tool_check_refuses_gnome_orca_stub
-test_orca_feature_probe_reads_cli_help
-test_orca_feature_force_override_skips_probe
+test_orca_feature_probe_reads_owning_command_help
 test_orca_json_get_reads_startup_terminal_handle
 test_orca_json_get_reads_agent_terminal_handle_alias
 test_orca_agent_for_harness_maps_supported_harnesses
 test_orca_worktree_create_passes_agent_flag
-test_orca_wait_tui_idle_falls_back_when_no_flag
+test_orca_wait_tui_idle_falls_back_when_unavailable
+test_orca_wait_tui_idle_uses_terminal_wait_when_available
