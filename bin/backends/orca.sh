@@ -53,7 +53,7 @@ fm_backend_orca_feature() {  # <send|wait> <flag-name>
     *) return 1 ;;
   esac
   case "$flag" in
-    tui-idle) printf '%s\n' "$help_text" | grep -Eq -- "[[:space:]<]${flag}[[:space:]<>]" ;;
+    tui-idle) printf '%s\n' "$help_text" | grep -Eq -- "[[:space:]<|]${flag}[[:space:]<>]" ;;
     *) printf '%s\n' "$help_text" | grep -Eq -- "[[:space:]]${flag}[[:space:]<>]" ;;
   esac
 }

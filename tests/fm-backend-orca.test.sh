@@ -83,7 +83,7 @@ if [ "${1:-} ${2:-} ${3:-}" = "terminal send --help" ]; then
 fi
 if [ "${1:-} ${2:-} ${3:-}" = "terminal wait --help" ]; then
   case "${FM_ORCA_WAIT_FEATURES:-tui-idle}" in
-    *tui-idle*) printf '  --for <tui-idle>             Wait for a settled TUI\n' ;;
+    *tui-idle*) printf '  --for exit|tui-idle           Wait for a settled TUI\n' ;;
   esac
   exit 0
 fi
