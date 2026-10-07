@@ -11,15 +11,15 @@ Orca is explicit-only and does not support secondmate spawns; the live Linux Orc
 
 Prerequisites:
 
-- Orca installed, running, and ready. On macOS, `/Applications/Orca.app` plus `brew install orca`. On Linux, the AppImage bundle plus its `linux-orca-cli-shim` directory on `PATH` (the convention is to append it via `ORCA_CLI_BIN_DIR=/home/chucky/.config/orca/linux-orca-cli-shim`).
-- The `orca-ide` CLI on `PATH`; firstmate prefers it and falls back to the shim only if a status probe confirms the Orca JSON shape (a bare `orca` resolving to the GNOME screen reader is refused).
+- Orca installed, running, and ready. On macOS, `/Applications/Orca.app` plus `brew install orca`. On Linux, the AppImage bundle plus its `linux-orca-cli-shim` directory on `PATH` for bootstrap, configured with `ORCA_CLI_BIN_DIR=/home/chucky/.config/orca/linux-orca-cli-shim` when `orca-ide` is unavailable.
+- The `orca-ide` CLI on `PATH`; firstmate prefers it, then probes the configured shim, then accepts a bare `orca` only when its status response confirms the Orca JSON shape (a bare `orca` resolving to the GNOME screen reader is refused).
 - The universal harness and toolchain requirements in [`configuration.md`](configuration.md#toolchain).
 
 Select Orca with local `config/backend` containing `orca`, `FM_BACKEND=orca` for one launch, or an explicit request to Firstmate.
 It is never auto-detected.
 
-Before any spawn mutates repository state, Firstmate requires `orca-ide status --json` (or `orca status --json`) to report `reachable=true` and `state="ready"`.
-The first task for a project registers that repository with `orca repo add --path` when needed.
+Before any spawn mutates repository state, Firstmate requires the resolved Orca CLI to report `reachable=true` and `state="ready"` from `status --json`.
+The first task for a project registers that repository with the resolved Orca CLI when needed.
 No manual repository registration is required.
 
 Open the Orca app to watch a task's terminal.
@@ -52,7 +52,7 @@ The shell terminal is necessary until Orca exposes a configuration bridge for Fi
 The terminal is recorded in task metadata.
 Exact command flags and response parsing are owned by `bin/backends/orca.sh` and script help.
 
-`fm-peek.sh` reads with `orca terminal read`.
+`fm-peek.sh` reads through the resolved Orca CLI.
 An ordinary metadata-routed `fm-send.sh` text steer becomes a durable steering-inbox record, and only its best-effort constant doorbell passes through Orca's submit machinery.
 On the typed plane, `fm-send.sh` verifies composer clearance through the fleet-wide classifier in `bin/fm-composer-lib.sh`, retrying Enter without retyping when a slash popup first fills an argument placeholder.
 The composer read is one bounded tail of the live terminal and never pages backward into scrollback, so a stale startup banner cannot compete with the bottom-anchored composer.
@@ -67,7 +67,7 @@ Before release, cleanup resolves the recorded Orca worktree id and verifies its 
 A missing, unreadable, or mismatched identity preserves metadata and stops rather than deleting anything.
 After those checks, Firstmate closes the exact terminal and releases the exact worktree with Orca's worktree command.
 It never raw-deletes an Orca worktree.
-A close the CLI never attempted, because `orca` is not on the path, stops cleanup with the metadata intact even under `--force`: removing those records would leave nothing on disk naming a terminal that may still be live.
+A close the CLI never attempted, because no supported Orca CLI is available, stops cleanup with the metadata intact even under `--force`: removing those records would leave nothing on disk naming a terminal that may still be live.
 Reinstall the CLI and rerun; [`verification/runtime-backends.md`](verification/runtime-backends.md) "Endpoint close" owns what this arm can and cannot prove about its own close.
 
 ## Active limits
