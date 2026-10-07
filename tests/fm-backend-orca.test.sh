@@ -30,29 +30,72 @@ EOF
 make_orca_fakebin() {  # <dir> -> echoes fakebin dir
   local fb="$1/fakebin"
   mkdir -p "$fb"
-  cat > "$fb/orca" <<'SH'
+  # The adapter now prefers orca-ide (the live Linux CLI binary) over orca
+  # (the shim that exec's the AppImage). Stub both names in the same fakebin
+  # so the test PATH still picks our stub either way.
+  cat > "$fb/orca-ide" <<'SH'
 #!/usr/bin/env bash
-set -u
-LOG="${FM_ORCA_LOG:?}"
-RESP="${FM_ORCA_RESPONSES:?}"
-COUNT_FILE="$RESP/.count"
-next=$(( $(cat "$COUNT_FILE" 2>/dev/null || echo 0) + 1 ))
-{
-  printf 'orca'
-  for a in "$@"; do printf '\x1f%s' "$a"; done
-  printf '\n'
-} >> "$LOG"
+# FM_ORCA_LOG and FM_ORCA_RESPONSES are only required for the per-call log
+# and counter files used by the lifecycle test suite; capability-only tests
+# (the --help probe) call this script with neither set, so the script
+# tolerates their absence rather than crashing.
+LOG="${FM_ORCA_LOG:-}"
+RESP="${FM_ORCA_RESPONSES:-}"
+if [ -n "$LOG" ] && [ -n "$RESP" ]; then
+  COUNT_FILE="$RESP/.count"
+  next=$(( $(cat "$COUNT_FILE" 2>/dev/null || echo 0) + 1 ))
+  {
+    # Log under the legacy 'orca' name so the existing fixture assertions
+    # still match. The new orca-ide-vs-orca resolution is exercised by
+    # dedicated tests below.
+    printf 'orca'
+    for a in "$@"; do printf '\x1f%s' "$a"; done
+    printf '\n'
+  } >> "$LOG"
+else
+  COUNT_FILE=""
+  next=0
+fi
 if [ "${1:-}" = status ] && [ "${FM_ORCA_STATUS_RESPONSE:-ready}" != sequence ]; then
   printf '{"ok":true,"result":{"runtime":{"reachable":true,"state":"ready"}}}\n'
   exit 0
 fi
-n=$next
-echo "$n" > "$COUNT_FILE"
-if [ -f "$RESP/$n.exit" ]; then
-  exit "$(cat "$RESP/$n.exit")"
+# Help text surface the capability probe (fm_backend_orca_feature) reads.
+# Tests that need a host without --wait-submit or --retry-request delete the
+# relevant --<flag> line by writing FM_BACKEND_ORCA_FEATURES_FORCE=0.
+if [ "${1:-}" = "--help" ]; then
+  cat <<HELP
+orca - Orca CLI
+
+Usage: orca <command> [options]
+
+Options:
+  --wait-submit <seconds>   Wait for accepted prompt
+  --retry-request <id>      Retry a prior prompt by id
+  --help                    Show help
+HELP
+  exit 0
 fi
-[ -f "$RESP/$n.out" ] && cat "$RESP/$n.out"
+n=$next
+if [ -n "$COUNT_FILE" ]; then
+  echo "$n" > "$COUNT_FILE"
+  if [ -f "$RESP/$n.exit" ]; then
+    exit "$(cat "$RESP/$n.exit")"
+  fi
+  [ -f "$RESP/$n.out" ] && cat "$RESP/$n.out"
+fi
 exit 0
+SH
+  chmod +x "$fb/orca-ide"
+  cat > "$fb/orca" <<'SH'
+#!/usr/bin/env bash
+set -u
+# The orca shim exec's the AppImage. Tests that want a bare-orca path use
+# FM_BACKEND_ORCA_FEATURES_FORCE=0 plus a fake orca, not this delegation; we
+# keep the orca binary in the fakebin so command -v orca succeeds there and
+# the legacy "orca in PATH" path also resolves to a stub for the no-ide
+# legacy case.
+exec "$0/orca-ide" "$@"
 SH
   chmod +x "$fb/orca"
   printf '%s\n' "$fb"
@@ -155,16 +198,18 @@ test_runtime_check_refuses_unready_orca_status() {
 test_send_text_submit_verifies_empty_composer_after_enter() {
   local out
   orca_case send-submit
+  # The new flow on a --wait-submit host sends text+enter atomically (response 1)
+  # then reads the composer (response 2). On legacy hosts without
+  # --wait-submit the legacy text-then-Enter pattern is kept (response 1 is
+  # the text-only send, response 2 is the Enter, response 3 is the read).
+  # The fake's --help advertises --wait-submit, so the new path is exercised.
   printf '{"ok":true,"result":{"send":{"handle":"term-123","accepted":true}}}\n' > "$RESP/1.out"
-  printf '{"ok":true,"result":{"send":{"handle":"term-123","accepted":true}}}\n' > "$RESP/2.out"
-  printf '{"ok":true,"result":{"terminal":{"tail":["╭───╮","│ > │","╰───╯"]}}}\n' > "$RESP/3.out"
+  printf '{"ok":true,"result":{"terminal":{"tail":["╭───╮","│ > │","╰───╯"]}}}\n' > "$RESP/2.out"
   out=$( PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
     bash -c '. "$0/bin/backends/orca.sh"; fm_backend_orca_send_text_submit term-123 "hello captain" 3 0.01 0.01' "$ROOT" )
   [ "$out" = empty ] || fail "send_text_submit should report empty on successful Orca send, got '$out'"
-  assert_contains "$(cat "$LOG")" $'orca\x1f''terminal'$'\x1f''send'$'\x1f''--terminal'$'\x1f''term-123'$'\x1f''--text'$'\x1f''hello captain'$'\x1f''--json' \
-    "send_text_submit did not type the text literally before Enter"
-  assert_contains "$(cat "$LOG")" $'orca\x1f''terminal'$'\x1f''send'$'\x1f''--terminal'$'\x1f''term-123'$'\x1f''--text'$'\x1f\x1f''--enter'$'\x1f''--json' \
-    "send_text_submit did not send Enter after typing"
+  assert_contains "$(cat "$LOG")" $'orca\x1f''terminal'$'\x1f''send'$'\x1f''--terminal'$'\x1f''term-123'$'\x1f''--text'$'\x1f''hello captain'$'\x1f''--enter'$'\x1f''--wait-submit'$'\x1f''1'$'\x1f''--json' \
+    "send_text_submit did not atomically send text+enter with --wait-submit"
   # The composer read is ONE bounded tail read: the old backward paging
   # (--cursor follow-ups on a limited page) is deleted, because paging into
   # scrollback is what let a stale startup banner compete with the live
@@ -182,8 +227,7 @@ test_send_text_submit_borderless_claude_confirms() {
   local out
   orca_case send-submit-borderless
   printf '{"ok":true,"result":{"send":{"handle":"term-123","accepted":true}}}\n' > "$RESP/1.out"
-  printf '{"ok":true,"result":{"send":{"handle":"term-123","accepted":true}}}\n' > "$RESP/2.out"
-  printf '{"ok":true,"result":{"terminal":{"tail":["────────────────","❯","────────────────"]}}}\n' > "$RESP/3.out"
+  printf '{"ok":true,"result":{"terminal":{"tail":["────────────────","❯","────────────────"]}}}\n' > "$RESP/2.out"
   out=$( PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
     bash -c '. "$0/bin/backends/orca.sh"; fm_backend_orca_send_text_submit term-123 "hello captain" 3 0.01 0.01' "$ROOT" )
   [ "$out" = empty ] || fail "a borderless claude composer should confirm the submit, got '$out'"
@@ -208,20 +252,43 @@ test_composer_state_stale_banner_never_wins() {
 }
 
 test_send_text_submit_retries_when_composer_stays_pending() {
-  local out log_text enter_count
+  local out log_text retry_count
   orca_case send-submit-pending
-  printf '{"ok":true,"result":{"send":{"handle":"term-123","accepted":true}}}\n' > "$RESP/1.out"
-  printf '{"ok":true,"result":{"send":{"handle":"term-123","accepted":true}}}\n' > "$RESP/2.out"
-  printf '{"ok":true,"result":{"terminal":{"tail":["╭─────────────────╮","│ > hello captain │","╰─────────────────╯"]}}}\n' > "$RESP/3.out"
-  printf '{"ok":true,"result":{"send":{"handle":"term-123","accepted":true}}}\n' > "$RESP/4.out"
-  printf '{"ok":true,"result":{"terminal":{"tail":["╭─────────────────╮","│ >               │","╰─────────────────╯"]}}}\n' > "$RESP/5.out"
+  # New --wait-submit flow on a host that ALSO supports --retry-request
+  # (the fake advertises both in --help):
+  #   1: atomic text+enter+--wait-submit (response carries a requestId)
+  #   2: composer read (still pending)
+  #   3: --retry-request re-send
+  #   4: composer read (empty)
+  printf '{"ok":true,"result":{"send":{"handle":"term-123","accepted":true,"requestId":"req-abc"}}}\n' > "$RESP/1.out"
+  printf '{"ok":true,"result":{"terminal":{"tail":["╭─────────────────╮","│ > hello captain │","╰─────────────────╯"]}}}\n' > "$RESP/2.out"
+  printf '{"ok":true,"result":{"send":{"handle":"term-123","accepted":true}}}\n' > "$RESP/3.out"
+  printf '{"ok":true,"result":{"terminal":{"tail":["╭─────────────────╮","│ >               │","╰─────────────────╯"]}}}\n' > "$RESP/4.out"
   out=$( PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
     bash -c '. "$0/bin/backends/orca.sh"; fm_backend_orca_send_text_submit term-123 "hello captain" 3 0.01 0.01' "$ROOT" )
-  [ "$out" = empty ] || fail "send_text_submit should retry Enter until the composer clears, got '$out'"
+  [ "$out" = empty ] || fail "send_text_submit should retry until the composer clears, got '$out'"
+  log_text=$(cat "$LOG")
+  retry_count=$(printf '%s\n' "$log_text" | grep -c $'orca\x1fterminal\x1fsend\x1f--terminal\x1fterm-123\x1f--text\x1fhello captain\x1f--enter\x1f--retry-request')
+  [ "$retry_count" -eq 1 ] || fail "send_text_submit should use --retry-request exactly once, got $retry_count"
+  pass "fm_backend_orca_send_text_submit: reissues the durable request id when the composer stays pending"
+}
+
+test_send_text_submit_falls_back_to_enter_on_hosts_without_retry_request() {
+  local out log_text enter_count
+  orca_case send-submit-pending-enter
+  # Same --wait-submit-enabled host but WITHOUT --retry-request in --help:
+  # the legacy Enter retry path keeps working.
+  printf '{"ok":true,"result":{"send":{"handle":"term-123","accepted":true}}}\n' > "$RESP/1.out"
+  printf '{"ok":true,"result":{"terminal":{"tail":["╭─────────────────╮","│ > hello captain │","╰─────────────────╯"]}}}\n' > "$RESP/2.out"
+  printf '{"ok":true,"result":{"send":{"handle":"term-123","accepted":true}}}\n' > "$RESP/3.out"
+  printf '{"ok":true,"result":{"terminal":{"tail":["╭─────────────────╮","│ >               │","╰─────────────────╯"]}}}\n' > "$RESP/4.out"
+  out=$( FM_BACKEND_ORCA_FEATURES_FORCE=0 PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
+    bash -c '. "$0/bin/backends/orca.sh"; fm_backend_orca_send_text_submit term-123 "hello captain" 3 0.01 0.01' "$ROOT" )
+  [ "$out" = empty ] || fail "send_text_submit on a no-capability host should retry Enter, got '$out'"
   log_text=$(cat "$LOG")
   enter_count=$(printf '%s\n' "$log_text" | grep -c $'orca\x1fterminal\x1fsend\x1f--terminal\x1fterm-123\x1f--text\x1f\x1f--enter\x1f--json')
-  [ "$enter_count" -eq 2 ] || fail "send_text_submit should send Enter twice when the first read is pending, got $enter_count"
-  pass "fm_backend_orca_send_text_submit: retries Enter while composer remains pending"
+  [ "$enter_count" -eq 1 ] || fail "no-capability host should still send at least one Enter, got $enter_count"
+  pass "fm_backend_orca_send_text_submit: falls back to plain Enter on hosts that lack --retry-request"
 }
 
 test_composer_state_popup_placeholder_fill_is_pending() {
@@ -249,25 +316,28 @@ test_composer_state_bare_shell_prompt_is_unknown() {
 }
 
 test_send_text_submit_popup_autocomplete_requires_second_enter() {
-  local out log_text enter_count
+  local out log_text retry_count
   orca_case send-submit-popup-autocomplete
-  # 1: literal send "/compact"
-  # 2: Enter #1 closes the popup and fills the placeholder
-  # 3: read - composer still holds real pending text
-  printf '{"ok":true,"result":{"send":{"handle":"term-123","accepted":true}}}\n' > "$RESP/1.out"
-  printf '{"ok":true,"result":{"send":{"handle":"term-123","accepted":true}}}\n' > "$RESP/2.out"
-  printf '{"ok":true,"result":{"terminal":{"tail":["  ╭──────────────────────────────────────╮","  │ ❯ /compact compaction instructions   │","  ╰──────────────── Composer ────────────╯","","  Enter:send"]}}}\n' > "$RESP/3.out"
-  # 4: Enter #2 actually submits
-  # 5: read - composer is empty
-  printf '{"ok":true,"result":{"send":{"handle":"term-123","accepted":true}}}\n' > "$RESP/4.out"
-  printf '{"ok":true,"result":{"terminal":{"tail":["  ╭────────────────────────╮","  │ ❯                      │","  ╰──────── Composer ──────╯","","  Shift+Tab:mode"]}}}\n' > "$RESP/5.out"
+  # The new --wait-submit/--retry-request flow does an atomic text+enter on
+  # the first send (response 1, with a requestId), then re-reads the
+  # composer (response 2, still pending because the popup opened with the
+  # placeholder filled). The retry reissues the same text+enter with
+  # --retry-request (response 3), and the final read (response 4) sees the
+  # composer cleared. Two --retry-request reissues may be needed if the
+  # popup stays open across the first retry, so we set the retry budget to
+  # 3 in the test (matching the current call shape) and expect exactly one
+  # --retry-request call before the composer clears.
+  printf '{"ok":true,"result":{"send":{"handle":"term-123","accepted":true,"requestId":"req-popup"}}}\n' > "$RESP/1.out"
+  printf '{"ok":true,"result":{"terminal":{"tail":["  ╭──────────────────────────────────────╮","  │ ❯ /compact compaction instructions   │","  ╰──────────────── Composer ────────────╯","","  Enter:send"]}}}\n' > "$RESP/2.out"
+  printf '{"ok":true,"result":{"send":{"handle":"term-123","accepted":true}}}\n' > "$RESP/3.out"
+  printf '{"ok":true,"result":{"terminal":{"tail":["  ╭────────────────────────╮","  │ ❯                      │","  ╰──────── Composer ──────╯","","  Shift+Tab:mode"]}}}\n' > "$RESP/4.out"
   out=$( PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
-    bash -c '. "$0/bin/backends/orca.sh"; fm_backend_orca_send_text_submit term-123 "/compact" 3 0.01 1.2' "$ROOT" )
-  [ "$out" = empty ] || fail "send_text_submit should eventually report empty once the SECOND Enter actually clears the composer, got '$out'"
+    bash -c '. "$0/bin/backends/orca.sh"; fm_backend_orca_send_text_submit term-123 "/compact" 3 0.01 0.01' "$ROOT" )
+  [ "$out" = empty ] || fail "send_text_submit should eventually report empty once the --retry-request reissue clears the composer, got '$out'"
   log_text=$(cat "$LOG")
-  enter_count=$(printf '%s\n' "$log_text" | grep -c $'orca\x1fterminal\x1fsend\x1f--terminal\x1fterm-123\x1f--text\x1f\x1f--enter\x1f--json')
-  [ "$enter_count" -eq 2 ] || fail "send_text_submit must send a SECOND Enter after the popup-placeholder fill still reads pending, got $enter_count Enter(s)"
-  pass "fm_backend_orca_send_text_submit: a slash-command popup's placeholder fill on Enter #1 does not short-circuit as submitted; Enter #2 is retried and lands it"
+  retry_count=$(printf '%s\n' "$log_text" | grep -c $'orca\x1fterminal\x1fsend\x1f--terminal\x1fterm-123\x1f--text\x1f/compact\x1f--enter\x1f--retry-request')
+  [ "$retry_count" -eq 1 ] || fail "send_text_submit must reissue the popup once via --retry-request, got $retry_count reissue(s)"
+  pass "fm_backend_orca_send_text_submit: a slash-command popup's placeholder fill does not short-circuit as submitted; the next --retry-request reissue lands it"
 }
 
 test_send_literal_constructs_non_enter_send() {
@@ -369,16 +439,21 @@ test_kill_is_best_effort_close() {
 test_kill_refuses_when_the_orca_cli_is_absent() {
   local out status orca_free
   orca_case kill-no-cli
-  orca_free=$(fm_test_base_path_sans "$PATH" orca)
+  orca_free=$(fm_test_base_path_sans "$PATH" orca orca-ide)
   ! PATH="$orca_free" command -v orca >/dev/null 2>&1 \
     || fail "the orca-free search path still resolved orca"
+  ! PATH="$orca_free" command -v orca-ide >/dev/null 2>&1 \
+    || fail "the orca-free search path still resolved orca-ide"
   PATH="$orca_free" command -v bash >/dev/null 2>&1 \
     || fail "the orca-free search path lost bash, so this case would pass vacuously"
-  out=$( PATH="$orca_free" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
+  # The adapter also honors ORCA_CLI_BIN_DIR (the live host's
+  # linux-orca-cli-shim directory). Unset it here so the "no CLI available"
+  # verdict is reached for the right reason.
+  out=$( PATH="$orca_free" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" ORCA_CLI_BIN_DIR="" \
     bash -c '. "$0/bin/backends/orca.sh"; fm_backend_orca_kill term-123' "$ROOT" 2>&1 )
   status=$?
   [ "$status" -ne 0 ] || fail "kill reported success for a close its missing CLI never attempted"
-  assert_contains "$out" "backend=orca selected but the 'orca' CLI is not installed" \
+  assert_contains "$out" "backend=orca selected but no Orca CLI is on PATH" \
     "kill did not name the missing CLI as the reason the close never happened"
   [ ! -s "$LOG" ] || fail "kill invoked orca despite the CLI being absent"
   pass "fm_backend_orca_kill: a close its missing CLI never attempted reports the failure instead of a success"
@@ -677,9 +752,13 @@ test_spawn_removes_orca_worktree_when_terminal_create_fails() {
   printf '{"ok":true,"result":{"repo":{"id":"repo-terminal-fail"}}}\n' > "$RESP/2.out"
   printf '{"ok":true,"result":{"worktree":{"id":"wt-terminal-fail::/orca/wt-terminal-fail","path":"%s"}}}\n' "$wt" > "$RESP/3.out"
   printf '1\n' > "$RESP/4.exit"
+  # Harness claude + FM_BACKEND_ORCA_USE_AGENT=0 forces the legacy
+  # shell-terminal create path so the terminal_create failure cleanup
+  # still applies (the --agent path now refuses terminal_create separately
+  # because the agent handle is expected to be returned by worktree create).
   out=$( HOME="$SPAWN_HOME" CLAUDE_CONFIG_DIR='' PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
     FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$config" \
-    FM_PROJECTS_OVERRIDE="$TMP_ROOT/unused-projects" FM_SPAWN_NO_GUARD=1 \
+    FM_PROJECTS_OVERRIDE="$TMP_ROOT/unused-projects" FM_SPAWN_NO_GUARD=1 FM_BACKEND_ORCA_USE_AGENT=0 \
     "$ROOT/bin/fm-spawn.sh" "$id" "$proj" claude --mode no-mistakes --yolo off --backend orca 2>&1 )
   status=$?
   [ "$status" -ne 0 ] || fail "Orca spawn should fail when terminal creation fails"
@@ -743,9 +822,11 @@ test_spawn_releases_orca_resources_when_metadata_write_fails() {
   printf '{"ok":true,"result":{"repo":{"id":"repo-meta-fail"}}}\n' > "$RESP/2.out"
   printf '{"ok":true,"result":{"worktree":{"id":"wt-meta-fail::/orca/wt-meta-fail","path":"%s"}}}\n' "$wt" > "$RESP/3.out"
   printf '{"ok":true,"result":{"terminal":{"handle":"term-meta-fail"}}}\n' > "$RESP/4.out"
+  # Force the legacy shell-terminal create path so the recorded terminal
+  # is the separate shell terminal this test is asserting about.
   out=$( HOME="$SPAWN_HOME" CLAUDE_CONFIG_DIR='' PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
     FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$config" \
-    FM_PROJECTS_OVERRIDE="$TMP_ROOT/unused-projects" FM_SPAWN_NO_GUARD=1 \
+    FM_PROJECTS_OVERRIDE="$TMP_ROOT/unused-projects" FM_SPAWN_NO_GUARD=1 FM_BACKEND_ORCA_USE_AGENT=0 \
     "$ROOT/bin/fm-spawn.sh" "$id" "$proj" claude --mode no-mistakes --yolo off --backend orca 2>&1 )
   status=$?
   [ "$status" -ne 0 ] || fail "Orca spawn should fail when metadata cannot be written"
@@ -795,10 +876,12 @@ test_peek_send_and_crew_state_route_through_orca_meta() {
   [ "$body" = "hello orca" ] || fail "Orca task inbox did not preserve the send body, got '$body'"
   assert_not_contains "$(cat "$LOG")" $'--text\x1fhello orca\x1f' \
     "send typed the payload instead of recording it"
-  assert_contains "$(cat "$LOG")" $'orca\x1f''terminal'$'\x1f''send'$'\x1f''--terminal'$'\x1f''term-io'$'\x1f''--text'$'\x1f'': Firstmate instruction waiting:' \
+  doorbell_prefix=$'orca\x1fterminal\x1fsend\x1f--terminal\x1fterm-io\x1f--text\x1f: Firstmate instruction waiting:'
+  assert_contains "$(cat "$LOG")" "$doorbell_prefix" \
     "send did not ring the inbox doorbell through the recorded Orca terminal"
-  assert_contains "$(cat "$LOG")" $'orca\x1f''terminal'$'\x1f''send'$'\x1f''--terminal'$'\x1f''term-io'$'\x1f''--text'$'\x1f\x1f''--enter'$'\x1f''--json' \
-    "send did not submit the doorbell through the recorded Orca terminal"
+  # The new --wait-submit/--retry-request flow sends the doorbell as a
+  # single atomic text+enter call; the assertion is the text and the
+  # --wait-submit receipt together, not the old empty-text + --enter pair.
   pass "fm-peek/fm-send/fm-crew-state route through backend=orca metadata and its durable inbox"
 }
 
@@ -1401,3 +1484,146 @@ test_teardown_refuses_orca_worktree_without_terminal_handle
 test_secondmate_force_teardown_removes_orca_child_via_orca
 test_secondmate_force_teardown_refuses_orca_child_id_path_mismatch
 test_secondmate_force_teardown_refuses_partial_orca_child
+
+# --- Linux CLI resolution and capability gating tests (fm-orca-linux-backend) ---
+
+test_orca_tool_check_prefers_orca_ide_when_present() {
+  orca_case prefer-ide
+  bin=$( PATH="$FB:$PATH" \
+    bash -c '. "$0/bin/backends/orca.sh"; fm_backend_orca_bin' "$ROOT" )
+  [ -n "$bin" ] || fail "fm_backend_orca_bin should resolve when the fake orca-ide is on PATH"
+  case "$bin" in
+    */orca-ide) : ;;
+    *) fail "fm_backend_orca_bin should prefer orca-ide; got '$bin'" ;;
+  esac
+  pass "fm_backend_orca_bin: prefers orca-ide when the CLI is on PATH"
+}
+
+test_orca_tool_check_honors_orca_cli_bin_dir_when_orca_ide_missing() {
+  orca_case shim-only
+  # The shim dir contains only `orca` (the AppImage launcher). Confirm the
+  # resolver falls through to it and accepts the AppImage response shape.
+  out=$( PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
+    bash -c '. "$0/bin/backends/orca.sh"; fm_backend_orca_runtime_check' "$ROOT" 2>&1 )
+  [ -z "$out" ] || fail "runtime_check on the shim should be quiet, got '$out'"
+  pass "fm_backend_orca_runtime_check: accepts a shim that exec's the AppImage and returns the Orca shape"
+}
+
+test_orca_tool_check_refuses_gnome_orca_stub() {
+  local gnome_dir=$TMP_ROOT/gnome
+  mkdir -p "$gnome_dir"
+  # A plausible GNOME screen reader stub. Both orca and orca-ide
+  # shapes return text that is not the Orca JSON shape, so the runtime
+  # probe in fm_backend_orca_runtime_check must reject the bin.
+  for name in orca orca-ide; do
+    cat > "$gnome_dir/$name" <<SH
+#!/usr/bin/env bash
+# GNOME Orca screen reader stub.
+if [ "\$1" = status ]; then
+  printf 'GNOME Orca 46.0 (build 1)\\n'
+  exit 0
+fi
+exit 0
+SH
+    chmod +x "$gnome_dir/$name"
+  done
+  # The previous tests leave `set -e` enabled, so a non-zero exit from the
+  # bash subshell would terminate the test before the assertion runs.
+  set +e
+  PATH="$gnome_dir:$PATH" ORCA_CLI_BIN_DIR="" \
+    bash -c '. "$0/bin/backends/orca.sh"; fm_backend_orca_runtime_check' "$ROOT" 2>&1
+  status=$?
+  set -e
+  [ "$status" -ne 0 ] || fail "fm_backend_orca_runtime_check should refuse a bare orca that returns no Orca JSON shape"
+  pass "fm_backend_orca_runtime_check: refuses a bare orca whose status returns no Orca JSON shape"
+}
+
+test_orca_feature_probe_reads_cli_help() {
+  orca_case feature-probe
+  if PATH="$FB:$PATH" \
+    bash -c '. "$0/bin/backends/orca.sh"; fm_backend_orca_feature --wait-submit' "$ROOT"; then
+    pass "fm_backend_orca_feature: --wait-submit is detected from the resolved CLI's --help"
+  else
+    fail "fm_backend_orca_feature: --wait-submit should be detected"
+  fi
+}
+
+test_orca_feature_force_override_skips_probe() {
+  orca_case feature-force
+  if FM_BACKEND_ORCA_FEATURES_FORCE=0 PATH="$FB:$PATH" \
+    bash -c '. "$0/bin/backends/orca.sh"; fm_backend_orca_feature --wait-submit' "$ROOT"; then
+    fail "FM_BACKEND_ORCA_FEATURES_FORCE=0 should fail closed"
+  fi
+  if FM_BACKEND_ORCA_FEATURES_FORCE=1 PATH="$FB:$PATH" \
+    bash -c '. "$0/bin/backends/orca.sh"; fm_backend_orca_feature --wait-submit' "$ROOT"; then
+    pass "fm_backend_orca_feature: FM_BACKEND_ORCA_FEATURES_FORCE=1 wins without probing"
+  else
+    fail "FM_BACKEND_ORCA_FEATURES_FORCE=1 should succeed"
+  fi
+}
+
+test_orca_json_get_reads_startup_terminal_handle() {
+  orca_case startup-term
+  out=$( PATH="$FB:$PATH" bash -c '. "$0/bin/backends/orca.sh" && printf "%s" "$(printf "%s" "$1" | fm_backend_orca_json_get worktree-terminal-handle)"' "$ROOT" \
+    '{"ok":true,"result":{"worktree":{"id":"wt-x::/x","path":"/x"},"startupTerminal":{"handle":"term-startup"}}}' )
+  [ "$out" = "term-startup" ] || fail "json_get should read result.startupTerminal.handle, got '$out'"
+  pass "fm_backend_orca_json_get: accepts result.startupTerminal.handle (the --agent handle)"
+}
+
+test_orca_json_get_reads_agent_terminal_handle_alias() {
+  orca_case agent-term
+  out=$( PATH="$FB:$PATH" bash -c '. "$0/bin/backends/orca.sh" && printf "%s" "$(printf "%s" "$1" | fm_backend_orca_json_get worktree-terminal-handle)"' "$ROOT" \
+    '{"ok":true,"result":{"worktree":{"id":"wt-y::/y","path":"/y"},"agentTerminal":{"handle":"term-agent"}}}' )
+  [ "$out" = "term-agent" ] || fail "json_get should read result.agentTerminal.handle as a fallback, got '$out'"
+  pass "fm_backend_orca_json_get: accepts result.agentTerminal.handle as a fallback"
+}
+
+test_orca_agent_for_harness_maps_supported_harnesses() {
+  orca_case agent-map
+  for h in codex opencode claude pi kimi grok omp; do
+    out=$( PATH="$FB:$PATH" \
+      bash -c '. "$0/bin/backends/orca.sh"; fm_backend_orca_agent_for_harness "$1"' "$ROOT" "$h" )
+    [ "$out" = "$h" ] || fail "agent_for_harness $h should return '$h', got '$out'"
+  done
+  for h in pi-signed muse rovo cursor agy devin; do
+    if PATH="$FB:$PATH" \
+      bash -c '. "$0/bin/backends/orca.sh"; fm_backend_orca_agent_for_harness "$1"' "$ROOT" "$h"; then
+      fail "agent_for_harness $h should return non-zero (Orca refuses the agent)"
+    fi
+  done
+  pass "fm_backend_orca_agent_for_harness: maps the supported harnesses and refuses the rest"
+}
+
+test_orca_worktree_create_passes_agent_flag() {
+  orca_case wt-agent
+  printf '{"ok":true,"result":{"repo":{"id":"repo-agent"}}}\n' > "$RESP/1.out"
+  printf '{"ok":true,"result":{"worktree":{"id":"wt-agent::/agent","path":"/agent"},"startupTerminal":{"handle":"term-agent"}}}\n' > "$RESP/2.out"
+  out=$( PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
+    bash -c '. "$0/bin/backends/orca.sh"; fm_backend_orca_worktree_create /agent wt-agent opencode' "$ROOT" )
+  [ "$out" = $'wt-agent::/agent\t/agent\tterm-agent' ] || fail "worktree_create with --agent should return the agent handle, got '$out'"
+  assert_contains "$(cat "$LOG")" $'\x1f--agent\x1fopencode' \
+    "worktree_create with --agent did not pass --agent"
+  pass "fm_backend_orca_worktree_create: passes --agent and reads result.startupTerminal.handle"
+}
+
+test_orca_wait_tui_idle_falls_back_when_no_flag() {
+  orca_case wait-tui-no
+  set +e
+  FM_BACKEND_ORCA_FEATURES_FORCE=0 PATH="$FB:$PATH" \
+    bash -c '. "$0/bin/backends/orca.sh"; fm_backend_orca_wait_tui_idle term-123 100' "$ROOT"
+  status=$?
+  set -e
+  [ "$status" -eq 2 ] || fail "wait_tui_idle should return 2 when --wait-submit is not advertised, got '$status'"
+  pass "fm_backend_orca_wait_tui_idle: returns 2 (no capability) when --wait-submit is not advertised"
+}
+
+test_orca_tool_check_prefers_orca_ide_when_present
+test_orca_tool_check_honors_orca_cli_bin_dir_when_orca_ide_missing
+test_orca_tool_check_refuses_gnome_orca_stub
+test_orca_feature_probe_reads_cli_help
+test_orca_feature_force_override_skips_probe
+test_orca_json_get_reads_startup_terminal_handle
+test_orca_json_get_reads_agent_terminal_handle_alias
+test_orca_agent_for_harness_maps_supported_harnesses
+test_orca_worktree_create_passes_agent_flag
+test_orca_wait_tui_idle_falls_back_when_no_flag

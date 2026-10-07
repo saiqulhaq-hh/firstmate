@@ -1330,9 +1330,11 @@ test_forced_secondmate_child_close_failure_still_refuses() {
 test_orca_close_failure_refuses_even_under_force() {
   local dir orca_free id=orca-strand rc
   dir=$(make_case orca-close-failure)
-  orca_free=$(fm_test_base_path_sans "$PATH" orca)
+  orca_free=$(fm_test_base_path_sans "$PATH" orca orca-ide)
   ! PATH="$dir/fakebin:$orca_free" command -v orca >/dev/null 2>&1 \
     || fail "the orca-free search path still resolved orca"
+  ! PATH="$dir/fakebin:$orca_free" command -v orca-ide >/dev/null 2>&1 \
+    || fail "the orca-free search path still resolved orca-ide"
   # The Orca arm reports a close its missing CLI never attempted, and the step
   # right after this close removes the Orca worktree through that same CLI, so
   # a forced continue could only die there having removed nothing. --force
@@ -1343,7 +1345,7 @@ test_orca_close_failure_refuses_even_under_force() {
     "backend=orca" "orca_worktree_id=worktree-9::/orca/worktree-9" "kind=ship" "mode=no-mistakes"
 
   set +e
-  env -u TMUX -u TMUX_PANE \
+  env -u TMUX -u TMUX_PANE -u ORCA_CLI_BIN_DIR \
     FM_HOME="$dir/home" FM_ROOT_OVERRIDE="$ROOT" FM_RUNTIME_LOG="$dir/runtime.log" \
     PATH="$dir/fakebin:$orca_free" "$TEARDOWN" "$id" --force \
     > "$dir/orca-forced.out" 2> "$dir/orca-forced.err"
@@ -1365,7 +1367,7 @@ test_orca_close_failure_refuses_even_under_force() {
   # test_forced_teardown_continues_past_a_close_it_could_not_make proves the
   # same operator authority does get through.
   set +e
-  env -u TMUX -u TMUX_PANE \
+  env -u TMUX -u TMUX_PANE -u ORCA_CLI_BIN_DIR \
     FM_HOME="$dir/home" FM_ROOT_OVERRIDE="$ROOT" FM_RUNTIME_LOG="$dir/runtime.log" \
     PATH="$dir/fakebin:$orca_free" "$TEARDOWN" "$id" \
     > "$dir/orca-unforced.out" 2> "$dir/orca-unforced.err"

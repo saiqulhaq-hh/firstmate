@@ -416,11 +416,11 @@ For spawn-capable adapters, the runtime session-provider backend controls where 
 
 | Runtime backend | Verification status | Reference |
 | --- | --- | --- |
-| `tmux` | Verified reference backend | [`docs/tmux-backend.md`](tmux-backend.md) |
-| `herdr` | Has its own required CI lane | [`docs/herdr-backend.md`](herdr-backend.md) |
-| `zellij` | Experimental; no dedicated real-backend CI lane | [`docs/zellij-backend.md`](zellij-backend.md) |
-| `orca` | Experimental; no dedicated real-backend CI lane | [`docs/orca-backend.md`](orca-backend.md) |
-| `cmux` | Experimental; no dedicated real-backend CI lane | [`docs/cmux-backend.md`](cmux-backend.md) |
+ | `tmux` | Verified reference backend | [`docs/tmux-backend.md`](tmux-backend.md) |
+ | `herdr` | Has its own required CI lane | [`docs/herdr-backend.md`](herdr-backend.md) |
+ | `zellij` | Experimental; no dedicated real-backend CI lane | [`docs/zellij-backend.md`](zellij-backend.md) |
+ | `orca` | Linux AppImage and macOS app; experimental; live evidence on the captain's Linux 1.4.221 host | [`docs/orca-backend.md`](orca-backend.md) |
+ | `cmux` | Experimental; no dedicated real-backend CI lane | [`docs/cmux-backend.md`](cmux-backend.md) |
 
 Treehouse remains the worktree provider for tmux, herdr, zellij, and cmux, since herdr, zellij, and cmux are session providers only; Orca provides both the task worktree and terminal endpoint.
 

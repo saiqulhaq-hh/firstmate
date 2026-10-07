@@ -37,6 +37,9 @@ TMP_ROOT=$(fm_test_tmproot fm-spawn-orca-worktree)
 make_orca_fakebin() {
   local dir=$1 fb
   fb=$(fm_fakebin "$dir")
+  # The adapter now prefers `orca-ide` over `orca`. The legacy test
+  # created only `orca`; copy the same body to `orca-ide` so the resolver
+  # picks the fake regardless of which name wins on PATH.
   cat > "$fb/orca" <<'SH'
 #!/usr/bin/env bash
 set -u
@@ -56,14 +59,26 @@ case "$1 $2" in
   "worktree create")
     name=
     prev=
+    agent=0
     for a in "$@"; do
-      [ "$prev" = --name ] && name=$a
+      case "$prev" in
+        --name) name=$a ;;
+        --agent) agent=1 ;;
+      esac
       prev=$a
     done
     wt="$DIR/orca-worktrees/$name"
     mkdir -p "$DIR/orca-worktrees"
     git -C "$DIR/project" worktree add --quiet -b "orca-$name" "$wt" >&2 || exit 1
-    printf '{"ok":true,"result":{"worktree":{"id":"wt-%s","path":"%s"}}}\n' "$name" "$wt"
+    if [ "$agent" -eq 1 ]; then
+      # --agent: the live 1.4.221 CLI returns the agent terminal in
+      # result.startupTerminal.handle (and result.agentTerminalHandle on
+      # older runtimes). The legacy result.terminal.handle is also kept
+      # for backends that still read it.
+      printf '{"ok":true,"result":{"worktree":{"id":"wt-%s","path":"%s"},"startupTerminal":{"handle":"term-%s"}}}\n' "$name" "$wt" "$name"
+    else
+      printf '{"ok":true,"result":{"worktree":{"id":"wt-%s","path":"%s"}}}\n' "$name" "$wt"
+    fi
     exit 0
     ;;
   "terminal create")
@@ -78,6 +93,8 @@ esac
 exit 0
 SH
   chmod +x "$fb/orca"
+  cp "$fb/orca" "$fb/orca-ide"
+  chmod +x "$fb/orca-ide"
   printf '%s\n' "$fb"
 }
 
@@ -164,7 +181,96 @@ EOF
   pass "a relaunch against an Orca-backed task is refused before the RELAUNCH+orca worktree carve-out could run"
 }
 
+# test_orca_spawn_passes_agent_and_creates_only_one_terminal: with the live
+# 1.4.221 --agent flag, the spawn must pass --agent to worktree create and
+# record the agent terminal handle - not call terminal_create separately.
+# That is the "only one worker terminal" contract.
+test_orca_spawn_passes_agent_and_creates_only_one_terminal() {
+  local case_dir home id=orca-agent-spawn fb out status wt_recorded terminal
+  case_dir="$TMP_ROOT/agent-spawn"
+  home="$case_dir/home"
+  mkdir -p "$home/data" "$home/projects" "$home/state" "$home/config"
+  touch "$home/state/.last-watcher-beat"
+  printf 'codex\n' > "$home/config/crew-harness"
+  printf 'manual\n' > "$home/config/backlog-backend"
+  fm_git_init_commit "$case_dir/project"
+  mkdir -p "$home/data/$id"
+  cat > "$home/data/$id/brief.md" <<EOF
+# Task
+## Captain's intent
+Confirm the spawn passes --agent to worktree create for a supported harness.
+
+## Firstmate spec
+The spawn must record the agent terminal handle.
+EOF
+  fb=$(make_orca_fakebin "$case_dir")
+  out=$(FM_ROOT_OVERRIDE='' FM_HOME="$home" HOME="$case_dir/user-home" \
+    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
+    FM_SPAWN_NO_GUARD=1 FM_TEST_ORCA_DIR="$case_dir" PATH="$fb:$PATH" \
+    "$SPAWN" "$id" "$case_dir/project" --mode no-mistakes --yolo off --backend orca 2>&1)
+  status=$?
+  expect_code 0 "$status" "an Orca-backed spawn with --agent should succeed"$'\n'"$out"
+  assert_contains "$out" "spawned $id" "spawn did not report success"$'\n'"$out"
+  # Recorded terminal must be the agent handle (term-*) that worktree
+  # create returned, not a separately created shell terminal.
+  terminal=$(grep '^terminal=' "$home/state/$id.meta" | cut -d= -f2-)
+  [ -n "$terminal" ] || fail "meta did not record a terminal"
+  case "$terminal" in
+    term-*) : ;;
+    *) fail "expected agent terminal handle (term-*); got '$terminal'" ;;
+  esac
+  pass "fm-spawn --backend orca: passes --agent to worktree create and records the agent terminal"
+}
+
+# test_orca_spawn_falls_back_to_shell_terminal_for_unsupported_harness:
+# a harness whose Orca --agent id is not recognised (here, pi-signed) must
+# still land the worktree and fall back to a separate terminal_create for
+# the shell terminal, not refuse.
+test_orca_spawn_falls_back_to_shell_terminal_for_unsupported_harness() {
+  local case_dir home id=orca-shell-spawn fb out status wt_recorded terminal
+  case_dir="$TMP_ROOT/shell-spawn"
+  home="$case_dir/home"
+  mkdir -p "$home/data" "$home/projects" "$home/state" "$home/config"
+  touch "$home/state/.last-watcher-beat"
+  printf 'muse\n' > "$home/config/crew-harness"
+  printf 'manual\n' > "$home/config/backlog-backend"
+  fm_git_init_commit "$case_dir/project"
+  mkdir -p "$home/data/$id"
+  cat > "$home/data/$id/brief.md" <<EOF
+# Task
+## Captain's intent
+Confirm a harness without a matching Orca --agent falls back to the legacy shell terminal.
+
+## Firstmate spec
+The spawn must call terminal_create separately and record that handle.
+EOF
+  # Stub the muse credential file so the harness credential preflight
+  # passes; the test only exercises the spawn-time terminal fallback, not
+  # the muse runtime.
+  mkdir -p "$case_dir/user-home/.config/muse"
+  printf '{"apiKey":"test-key"}\n' > "$case_dir/user-home/.config/muse/auth.json"
+  fb=$(make_orca_fakebin "$case_dir")
+  out=$(FM_ROOT_OVERRIDE='' FM_HOME="$home" HOME="$case_dir/user-home" \
+    XDG_CONFIG_HOME="$case_dir/user-home/.config" XDG_DATA_HOME="$case_dir/user-home/.local/share" \
+    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
+    FM_SPAWN_NO_GUARD=1 FM_TEST_ORCA_DIR="$case_dir" PATH="$fb:$PATH" \
+    "$SPAWN" "$id" "$case_dir/project" --mode no-mistakes --yolo off --backend orca 2>&1)
+  status=$?
+  expect_code 0 "$status" "an Orca-backed spawn with an unsupported harness should still succeed via the shell-terminal fallback"$'\n'"$out"
+  assert_contains "$out" "spawned $id" "spawn did not report success"$'\n'"$out"
+  terminal=$(grep '^terminal=' "$home/state/$id.meta" | cut -d= -f2-)
+  [ -n "$terminal" ] || fail "meta did not record a terminal"
+  # The fake's terminal_create returns handle "term-1"; that is the shell
+  # terminal the legacy code creates separately.
+  [ "$terminal" = "term-1" ] || fail "expected the legacy shell terminal handle 'term-1'; got '$terminal'"
+  pass "fm-spawn --backend orca: falls back to a separate terminal_create when the harness has no Orca --agent"
+}
+
 test_orca_fresh_spawn_enters_the_worktree_it_created
 test_orca_relaunch_is_refused_before_the_worktree_carveout_could_run
+test_orca_spawn_passes_agent_and_creates_only_one_terminal
+test_orca_spawn_falls_back_to_shell_terminal_for_unsupported_harness
 
 echo "# all fm-spawn-orca-worktree tests passed"

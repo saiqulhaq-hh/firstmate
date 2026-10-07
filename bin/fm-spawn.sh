@@ -3873,7 +3873,21 @@ EOF
     ;;
   orca)
     set +e
-    ORCA_WT_RAW=$(fm_backend_orca_worktree_create "$PROJ_ABS" "$W")
+    # FM_BACKEND_ORCA_USE_AGENT (1=force on, 0=force off, empty=auto by
+    # fm_backend_orca_agent_for_harness) is the only knob that controls
+    # whether the spawn passes --agent to worktree create, so tests can
+    # exercise the legacy shell-terminal create path without standing up
+    # a fresh --agent-capable fake.
+    case "${FM_BACKEND_ORCA_USE_AGENT:-}" in
+      0) ORCA_AGENT="" ;;
+      1) ORCA_AGENT=$(fm_backend_orca_agent_for_harness "$HARNESS" 2>/dev/null || true) ;;
+      *) ORCA_AGENT=$(fm_backend_orca_agent_for_harness "$HARNESS" 2>/dev/null || true) ;;
+    esac
+    if [ -n "$ORCA_AGENT" ]; then
+      ORCA_WT_RAW=$(fm_backend_orca_worktree_create "$PROJ_ABS" "$W" "$ORCA_AGENT")
+    else
+      ORCA_WT_RAW=$(fm_backend_orca_worktree_create "$PROJ_ABS" "$W")
+    fi
     ORCA_WT_STATUS=$?
     set -e
     if [ "$ORCA_WT_STATUS" -ne 0 ]; then
@@ -3891,8 +3905,19 @@ EOF
       exit 1
     fi
     validate_spawn_worktree "orca worktree create" "$W"
-    if [ -z "$ORCA_TERMINAL" ]; then
+    # `orca worktree create --agent <harness>` (Orca 1.4.221+) returns the
+    # agent terminal handle as result.startupTerminal.handle; we already
+    # captured it above and only need a separate terminal when no agent
+    # was specified. This is the "only one worker terminal" contract the
+    # captain asked for: a fallback shell terminal used to be created even
+    # for supported harnesses because the old JSON parser only knew the
+    # result.terminal.handle shape.
+    if [ -z "$ORCA_TERMINAL" ] && [ -z "$ORCA_AGENT" ]; then
       ORCA_TERMINAL=$(fm_backend_orca_terminal_create "$ORCA_WORKTREE_ID" "$W") || exit 1
+    fi
+    if [ -z "$ORCA_TERMINAL" ]; then
+      echo "error: orca worktree create with --agent $ORCA_AGENT did not return a terminal handle for $W" >&2
+      exit 1
     fi
     T="$ORCA_TERMINAL"
     ;;

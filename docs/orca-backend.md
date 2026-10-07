@@ -1,24 +1,24 @@
 # Orca runtime backend
 
-Orca is an experimental macOS backend in which the Orca app owns both the task worktree and terminal endpoint.
+Orca is an experimental backend in which the Orca app owns both the task worktree and terminal endpoint.
 The crewmate harness remains the agent process launched inside that endpoint.
 Firstmate agents load [`firstmate-orca`](../.agents/skills/firstmate-orca/SKILL.md) before operating or recovering this backend.
 
 ## Setup
 
-Pick Orca when you already use the Orca macOS app and want Orca-managed worktrees and terminals instead of Treehouse plus a session multiplexer.
-Orca is macOS-only, explicit-only, and does not support secondmate spawns.
+Pick Orca when you already use the Orca app and want Orca-managed worktrees and terminals instead of Treehouse plus a session multiplexer.
+Orca is explicit-only and does not support secondmate spawns; the live Linux Orca 1.4.221 host is supported today, and macOS continues to work.
 
 Prerequisites:
 
-- `/Applications/Orca.app` installed, running, and ready.
-- The `orca` CLI, installed with `brew install orca`.
+- Orca installed, running, and ready. On macOS, `/Applications/Orca.app` plus `brew install orca`. On Linux, the AppImage bundle plus its `linux-orca-cli-shim` directory on `PATH` (the convention is to append it via `ORCA_CLI_BIN_DIR=/home/chucky/.config/orca/linux-orca-cli-shim`).
+- The `orca-ide` CLI on `PATH`; firstmate prefers it and falls back to the shim only if a status probe confirms the Orca JSON shape (a bare `orca` resolving to the GNOME screen reader is refused).
 - The universal harness and toolchain requirements in [`configuration.md`](configuration.md#toolchain).
 
 Select Orca with local `config/backend` containing `orca`, `FM_BACKEND=orca` for one launch, or an explicit request to Firstmate.
 It is never auto-detected.
 
-Before any spawn mutates repository state, Firstmate requires `orca status --json` to report `reachable=true` and `state="ready"`.
+Before any spawn mutates repository state, Firstmate requires `orca-ide status --json` (or `orca status --json`) to report `reachable=true` and `state="ready"`.
 The first task for a project registers that repository with `orca repo add --path` when needed.
 No manual repository registration is required.
 
@@ -69,13 +69,28 @@ Reinstall the CLI and rerun; [`verification/runtime-backends.md`](verification/r
 
 ## Active limits
 
-- Orca is macOS-only and explicit-only.
+- Orca is explicit-only.
 - The app must be running and report ready.
 - Secondmate spawns are unsupported.
 - Escape is unsupported.
 - Orca exposes no stable CLI version or protocol marker, so readiness is the compatibility gate rather than a version floor.
 - Only the verified terminal-handle and worktree result fields are accepted; speculative response shapes are rejected.
+- The first send is `text + --enter` atomically; a popup-fill Enter retry is the only second action. Hosts that advertise `--wait-submit` and `--retry-request` use those primitives; older hosts fall back to the legacy text-then-Enter pattern unchanged.
 - Orca's worktree shape is unverified against the spawn-time Claude workspace-trust check in `bin/fm-claude-trust.sh`, which refuses any path that is not a linked git worktree sharing the project's git common dir, so a claude spawn on Orca fails loudly at that check rather than launching if Orca clones instead of linking.
+
+## Follow-up recommendations
+
+These are deliberately NOT shipped in this change and are recorded here so the next Orca-aware slice can pick them up without re-deriving the scope.
+
+- `orca account add/list/select/rm` and the `ORCA_OPENCODE_AGENT` / `ORCA_AGENT_HOOK_*` env wiring for homes that want firstmate to consult the host's account list.
+- `orca environment add/list/show/rm` and `orca serve` for the headless / remote-runtime pairing path the captain's `ORCA_AGENT_HOOK_*` env implies.
+- `orca worktree create --prompt`, `--base-branch`, `--issue`, `--pr`, `--linear-issue`, `--comment` plumbing into the firstmate brief-to-flag translation.
+- The `ORCA_OPENCODE_AGENT` agent identity and the host's `ORCA_AGENT_HOOK_*` wake bus; today firstmate records nothing about the opencode agent identity the host already exposes.
+- `orca terminal close --tab` and `orca terminal close --worktree --all` for the scout-task teardown where the worktree is single-surface.
+- `orca repo set --external-worktree-visibility` and `orca repo set-base-ref` for repo registration defaults.
+- `terminal wait --for tui-idle` is wired into the empty-composer fast-path only when the host advertises `--wait-submit`; a future refresh should drive a live `tui-idle` arm under the existing composer-matrix guard rather than only relying on the portable regressions.
+- `--base-branch`, `--issue`, `--pr`, `--linear-issue`, `--comment` plumbing in the spawn brief-to-flag translation.
+- `fm-cli` self-management of the host shim, the env-var propagation, and the agent hook subscription are out of scope here.
 
 ## Regression entry points
 
