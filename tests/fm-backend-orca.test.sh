@@ -611,8 +611,8 @@ test_spawn_preserves_orca_metadata_when_pathless_worktree_cleanup_fails() {
   pass "fm-spawn.sh --backend orca: preserves metadata when pathless cleanup fails"
 }
 
-test_spawn_writes_orca_metadata_and_prompts_native_agent() {
-  local proj wt data state config id out log
+test_spawn_writes_orca_metadata_and_launches_profiled_shell_harness() {
+  local proj wt data state config id out log launch_file launch
   id="orcaspawnz1"
   proj="$TMP_ROOT/spawn-project"
   wt="$TMP_ROOT/spawn-wt"
@@ -627,11 +627,12 @@ test_spawn_writes_orca_metadata_and_prompts_native_agent() {
   log="$LOG"
   printf '1\n' > "$RESP/1.exit"
   printf '{"ok":true,"result":{"repo":{"id":"repo-spawn"}}}\n' > "$RESP/2.out"
-  printf '{"ok":true,"result":{"worktree":{"id":"wt-spawn::/orca/wt-spawn","path":"%s"},"terminal":{"handle":"term-spawn"}}}\n' "$wt" > "$RESP/3.out"
+  printf '{"ok":true,"result":{"worktree":{"id":"wt-spawn::/orca/wt-spawn","path":"%s"}}}\n' "$wt" > "$RESP/3.out"
+  printf '{"ok":true,"result":{"terminal":{"handle":"term-spawn"}}}\n' > "$RESP/4.out"
   out=$( HOME="$SPAWN_HOME" XDG_CONFIG_HOME="$SPAWN_HOME/.config" XDG_DATA_HOME="$SPAWN_HOME/.local/share" CLAUDE_CONFIG_DIR='' PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
     FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$config" \
     FM_PROJECTS_OVERRIDE="$TMP_ROOT/unused-projects" FM_SPAWN_NO_GUARD=1 \
-    "$ROOT/bin/fm-spawn.sh" "$id" "$proj" claude --mode no-mistakes --yolo off --backend orca 2>&1 )
+    "$ROOT/bin/fm-spawn.sh" "$id" "$proj" claude --model sonnet --effort high --mode no-mistakes --yolo off --backend orca 2>&1 )
   expect_code 0 $? "fm-spawn.sh --backend orca should succeed with fake Orca"$'\n'"$out"
   assert_contains "$out" "spawned $id harness=claude kind=ship mode=no-mistakes yolo=off window=fm-$id worktree=$wt" \
     "spawn output missing Orca window/worktree summary"
@@ -640,15 +641,18 @@ test_spawn_writes_orca_metadata_and_prompts_native_agent() {
   assert_grep "terminal=term-spawn" "$state/$id.meta" "meta missing terminal handle"
   assert_grep "orca_worktree_id=wt-spawn::/orca/wt-spawn" "$state/$id.meta" "meta missing Orca worktree id"
   assert_grep "worktree=$wt" "$state/$id.meta" "meta missing Orca worktree path"
-  assert_not_contains "$(cat "$log")" $'orca\x1f''terminal'$'\x1f''create' \
-    "spawn should reuse the implicit terminal returned by Orca worktree creation"
-  assert_contains "$(cat "$log")" $'orca\x1f''terminal'$'\x1f''send'$'\x1f''--terminal'$'\x1f''term-spawn'$'\x1f''--text'$'\x1f''Read and follow the launch brief at ' \
-    "spawn did not deliver the launch brief as an Orca agent prompt"
-  assert_not_contains "$(cat "$log")" $'\x1f''--text'$'\x1f''export ' \
-    "spawn must not send shell exports into a native agent terminal"
-  assert_not_contains "$(cat "$log")" $'\x1f''--text'$'\x1f''. /tmp/' \
-    "spawn must not send a staged shell launch into a native agent terminal"
-  pass "fm-spawn.sh --backend orca: records metadata and prompts the native agent"
+  assert_contains "$(cat "$log")" $'orca\x1f''terminal'$'\x1f''create'$'\x1f''--worktree'$'\x1f''id:wt-spawn::/orca/wt-spawn' \
+    "spawn should create the shell terminal after worktree creation"
+  assert_not_contains "$(cat "$log")" $'\x1f''--agent'$'\x1f' \
+    "spawn must not require Orca's unsupported native-agent launch bridge"
+  launch_file=$(tr '\037' '\n' < "$log" | sed -n "s/^\\. '\\([^']*\\)'$/\\1/p" | tail -n 1)
+  [ -n "$launch_file" ] && [ -f "$launch_file" ] || fail "spawn did not deliver a staged shell launch"
+  launch=$(cat "$launch_file")
+  assert_contains "$launch" "--model 'sonnet' --effort 'high'" \
+    "Orca shell launch did not preserve the requested Claude profile"
+  assert_contains "$launch" "--dangerously-skip-permissions" \
+    "Orca shell launch did not preserve the harness safety contract"
+  pass "fm-spawn.sh --backend orca: records metadata and launches the profiled shell harness"
 }
 
 test_spawn_refuses_orca_secondmate_before_home_mutation() {
@@ -1471,7 +1475,7 @@ test_json_get_ignores_undocumented_terminal_id_shapes
 test_worktree_and_terminal_helpers_parse_json
 test_worktree_create_removes_worktree_when_path_missing
 test_spawn_preserves_orca_metadata_when_pathless_worktree_cleanup_fails
-test_spawn_writes_orca_metadata_and_prompts_native_agent
+test_spawn_writes_orca_metadata_and_launches_profiled_shell_harness
 test_spawn_refuses_orca_secondmate_before_home_mutation
 test_spawn_refuses_orca_when_runtime_not_ready
 test_spawn_refuses_orca_nonisolated_worktree
@@ -1581,34 +1585,6 @@ test_orca_json_get_reads_agent_terminal_handle_alias() {
   pass "fm_backend_orca_json_get: accepts result.agentTerminal.handle as a fallback"
 }
 
-test_orca_agent_for_harness_maps_supported_harnesses() {
-  orca_case agent-map
-  for h in codex opencode claude pi kimi grok omp; do
-    out=$( PATH="$FB:$PATH" \
-      bash -c '. "$0/bin/backends/orca.sh"; fm_backend_orca_agent_for_harness "$1"' "$ROOT" "$h" )
-    [ "$out" = "$h" ] || fail "agent_for_harness $h should return '$h', got '$out'"
-  done
-  for h in pi-signed muse rovo cursor agy devin; do
-    if PATH="$FB:$PATH" \
-      bash -c '. "$0/bin/backends/orca.sh"; fm_backend_orca_agent_for_harness "$1"' "$ROOT" "$h"; then
-      fail "agent_for_harness $h should return non-zero (Orca refuses the agent)"
-    fi
-  done
-  pass "fm_backend_orca_agent_for_harness: maps the supported harnesses and refuses the rest"
-}
-
-test_orca_worktree_create_passes_agent_flag() {
-  orca_case wt-agent
-  printf '{"ok":true,"result":{"repo":{"id":"repo-agent"}}}\n' > "$RESP/1.out"
-  printf '{"ok":true,"result":{"worktree":{"id":"wt-agent::/agent","path":"/agent"},"startupTerminal":{"handle":"term-agent"}}}\n' > "$RESP/2.out"
-  out=$( PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
-    bash -c '. "$0/bin/backends/orca.sh"; fm_backend_orca_worktree_create /agent wt-agent opencode' "$ROOT" )
-  [ "$out" = $'wt-agent::/agent\t/agent\tterm-agent' ] || fail "worktree_create with --agent should return the agent handle, got '$out'"
-  assert_contains "$(cat "$LOG")" $'\x1f--agent\x1fopencode' \
-    "worktree_create with --agent did not pass --agent"
-  pass "fm_backend_orca_worktree_create: passes --agent and reads result.startupTerminal.handle"
-}
-
 test_orca_wait_tui_idle_falls_back_when_unavailable() {
   orca_case wait-tui-no
   set +e
@@ -1638,7 +1614,5 @@ test_orca_tool_check_refuses_gnome_orca_stub
 test_orca_feature_probe_reads_owning_command_help
 test_orca_json_get_reads_startup_terminal_handle
 test_orca_json_get_reads_agent_terminal_handle_alias
-test_orca_agent_for_harness_maps_supported_harnesses
-test_orca_worktree_create_passes_agent_flag
 test_orca_wait_tui_idle_falls_back_when_unavailable
 test_orca_wait_tui_idle_uses_terminal_wait_when_available

@@ -1213,8 +1213,6 @@ BACKEND=
 ORCA_ABORT_CLEANUP=0
 ORCA_WORKTREE_ID=
 ORCA_TERMINAL=
-ORCA_AGENT=
-ORCA_NATIVE_AGENT=0
 HERDR_PROJECTION_ABORT_CLEANUP=0
 HERDR_PROJECTION_ABORT_SESSION=
 HERDR_PROJECTION_ABORT_TASK_PANE=
@@ -3875,13 +3873,7 @@ EOF
     ;;
   orca)
     set +e
-    ORCA_AGENT=$(fm_backend_orca_agent_for_harness "$HARNESS" 2>/dev/null || true)
-    [ -z "$ORCA_AGENT" ] || ORCA_NATIVE_AGENT=1
-    if [ -n "$ORCA_AGENT" ]; then
-      ORCA_WT_RAW=$(fm_backend_orca_worktree_create "$PROJ_ABS" "$W" "$ORCA_AGENT")
-    else
-      ORCA_WT_RAW=$(fm_backend_orca_worktree_create "$PROJ_ABS" "$W")
-    fi
+    ORCA_WT_RAW=$(fm_backend_orca_worktree_create "$PROJ_ABS" "$W")
     ORCA_WT_STATUS=$?
     set -e
     if [ "$ORCA_WT_STATUS" -ne 0 ]; then
@@ -3899,18 +3891,11 @@ EOF
       exit 1
     fi
     validate_spawn_worktree "orca worktree create" "$W"
-    # `orca worktree create --agent <harness>` (Orca 1.4.221+) returns the
-    # agent terminal handle as result.startupTerminal.handle; we already
-    # captured it above and only need a separate terminal when no agent
-    # was specified. This is the "only one worker terminal" contract the
-    # captain asked for: a fallback shell terminal used to be created even
-    # for supported harnesses because the old JSON parser only knew the
-    # result.terminal.handle shape.
-    if [ -z "$ORCA_TERMINAL" ] && [ -z "$ORCA_AGENT" ]; then
+    if [ -z "$ORCA_TERMINAL" ]; then
       ORCA_TERMINAL=$(fm_backend_orca_terminal_create "$ORCA_WORKTREE_ID" "$W") || exit 1
     fi
     if [ -z "$ORCA_TERMINAL" ]; then
-      echo "error: orca worktree create with --agent $ORCA_AGENT did not return a terminal handle for $W" >&2
+      echo "error: orca did not return a terminal handle for $W" >&2
       exit 1
     fi
     T="$ORCA_TERMINAL"
@@ -3971,7 +3956,6 @@ spawn_send_key() { # <target> <key>
 # launch boundary and makes a dropped or ignored cwd change a refusal.
 spawn_enter_recorded_worktree() {
   [ "$KIND" = secondmate ] && return 0
-  [ "$ORCA_NATIVE_AGENT" = 1 ] && return 0
   spawn_send_text_line "$WT_TARGET" "cd -- $(shell_quote "$WT")" || {
     echo "error: task $ID's endpoint could not be moved into its recorded worktree '$WT'; refusing to launch outside the copy holding its work" >&2
     exit 1
@@ -5326,39 +5310,37 @@ spawn_record_traceparent() {
 # Export GOTMPDIR into the crewmate's pane shell so the agent and every child
 # process (go build, go test, ...) inherit it. Sent before the launch command so
 # the env is set when the agent starts; the brief sleep lets the export land.
-if [ "$ORCA_NATIVE_AGENT" != 1 ]; then
-  spawn_send_text_line "$T" "export GOTMPDIR=$TASK_TMP/gotmp"
-  # Export the compact-adviser kill switch into the pane shell through the same
-  # pre-launch channel, so later commands in that shell inherit it too. The launch
-  # command independently establishes the value for the agent process itself.
-  spawn_send_text_line "$T" "export COMPACT_ADVISER_DISABLE=1"
-  if [ "$LAVISH_AXI_HOST_CONFIG_PRESENT" = 1 ]; then
-    spawn_send_text_line "$T" "export LAVISH_AXI_HOST=$(shell_quote "$LAVISH_AXI_HOST")"
-  fi
-  # Mark the pane as a task worker so bin/fm-test-run.sh can refuse to run the
-  # suite in the repository's primary checkout. Ship and scout workers are the
-  # ones assigned an isolated worktree; a secondmate runs its own home instead.
-  # The id reached a validated bare-slug charset above, so it carries no shell
-  # syntax of its own.
-  if [ "$KIND" = ship ] || [ "$KIND" = scout ]; then
-    spawn_send_text_line "$T" "export FM_TASK_ID=$ID"
-  fi
-  # Send through the exact channel that already ships GOTMPDIR, so every backend
-  # and harness - ship, scout, and secondmate - gets it before launch. Skipped
-  # entirely when trace context is off.
-  if [ -n "$SPAWN_TRACEPARENT" ]; then
-    if spawn_send_text_line "$T" "export TRACEPARENT=$SPAWN_TRACEPARENT"; then
-      if ! spawn_record_traceparent; then
-        LAUNCH="unset TRACEPARENT; $LAUNCH"
-      fi
-    else
-      TRACE_SEND_STATUS=$?
-      if [ "$TRACE_SEND_STATUS" -eq 2 ]; then
-        echo "error: trace-context input could not be cleared for $W; refusing to append the launch command" >&2
-        exit 1
-      fi
+spawn_send_text_line "$T" "export GOTMPDIR=$TASK_TMP/gotmp"
+# Export the compact-adviser kill switch into the pane shell through the same
+# pre-launch channel, so later commands in that shell inherit it too. The launch
+# command independently establishes the value for the agent process itself.
+spawn_send_text_line "$T" "export COMPACT_ADVISER_DISABLE=1"
+if [ "$LAVISH_AXI_HOST_CONFIG_PRESENT" = 1 ]; then
+  spawn_send_text_line "$T" "export LAVISH_AXI_HOST=$(shell_quote "$LAVISH_AXI_HOST")"
+fi
+# Mark the pane as a task worker so bin/fm-test-run.sh can refuse to run the
+# suite in the repository's primary checkout. Ship and scout workers are the
+# ones assigned an isolated worktree; a secondmate runs its own home instead.
+# The id reached a validated bare-slug charset above, so it carries no shell
+# syntax of its own.
+if [ "$KIND" = ship ] || [ "$KIND" = scout ]; then
+  spawn_send_text_line "$T" "export FM_TASK_ID=$ID"
+fi
+# Send through the exact channel that already ships GOTMPDIR, so every backend
+# and harness - ship, scout, and secondmate - gets it before launch. Skipped
+# entirely when trace context is off.
+if [ -n "$SPAWN_TRACEPARENT" ]; then
+  if spawn_send_text_line "$T" "export TRACEPARENT=$SPAWN_TRACEPARENT"; then
+    if ! spawn_record_traceparent; then
       LAUNCH="unset TRACEPARENT; $LAUNCH"
     fi
+  else
+    TRACE_SEND_STATUS=$?
+    if [ "$TRACE_SEND_STATUS" -eq 2 ]; then
+      echo "error: trace-context input could not be cleared for $W; refusing to append the launch command" >&2
+      exit 1
+    fi
+    LAUNCH="unset TRACEPARENT; $LAUNCH"
   fi
 fi
 if [ "$LAUNCH_ENV_ENABLED" = 1 ]; then
@@ -5412,61 +5394,50 @@ spawn_launch_home_token() {
   esac
   printf '%s' "$hash"
 }
-if [ "$ORCA_NATIVE_AGENT" = 1 ]; then
-  if [ "$HARNESS" != kimi ]; then
-    SPAWN_LAUNCH_SENT=1
-    if ! fm_backend_orca_send_text_line_watch "$T" "Read and follow the launch brief at $BRIEF_REAL." >/dev/null; then
-      echo "error: Orca native agent could not receive task $ID's launch brief" >&2
-      exit 1
-    fi
-  fi
-else
-  LAUNCH_HOME_TOKEN=$(spawn_launch_home_token "$FM_HOME") || LAUNCH_HOME_TOKEN=
-  if [ -z "$LAUNCH_HOME_TOKEN" ]; then
-    echo "error: could not derive a home identity for the staged launch file" >&2
-    exit 1
-  fi
-  case "$SPAWN_GEN" in
-    *[!A-Za-z0-9.]*|'') echo "error: spawn incarnation token is not a usable launch-file nonce" >&2; exit 1 ;;
-  esac
-  LAUNCH_DIR="/tmp/fm-$ID+$LAUNCH_HOME_TOKEN"
-  if ! (umask 077 && mkdir "$LAUNCH_DIR") 2>/dev/null; then
-    if [ -L "$LAUNCH_DIR" ] || [ ! -d "$LAUNCH_DIR" ] || [ ! -O "$LAUNCH_DIR" ] ||
-      [ -n "$(find "$LAUNCH_DIR" -prune \( -perm -g=w -o -perm -o=w \) -print 2>/dev/null)" ] ||
-      ! chmod 700 "$LAUNCH_DIR"; then
-      echo "error: task launch directory $LAUNCH_DIR already exists and is not a private directory owned by this user; refusing to stage the launch command there; inspect and remove it, then retry" >&2
-      exit 1
-    fi
-  fi
-  LAUNCH_FILE="$LAUNCH_DIR/launch.$SPAWN_GEN.sh"
-  LAUNCH_STAGE="$LAUNCH_DIR/.launch.$SPAWN_GEN.tmp"
-  if [ -e "$LAUNCH_FILE" ] || [ -L "$LAUNCH_FILE" ]; then
-    echo "error: task launch file $LAUNCH_FILE already exists; refusing to replace it" >&2
-    exit 1
-  fi
-  if ! (umask 077 && printf '%s\n' "$LAUNCH" >"$LAUNCH_STAGE" &&
-    chmod 0600 "$LAUNCH_STAGE" && mv -f "$LAUNCH_STAGE" "$LAUNCH_FILE"); then
-    rm -f "$LAUNCH_STAGE"
-    echo "error: could not stage the launch command at $LAUNCH_FILE" >&2
-    exit 1
-  fi
-  sleep 0.3
-  SPAWN_LAUNCH_SENT=1
-  spawn_send_literal "$T" ". $(shell_quote "$LAUNCH_FILE")"
-  sleep 0.3
-  if [ "${HERDR_PROJECTED:-0}" -eq 1 ]; then
-    HERDR_PROJECTION_ABORT_CLEANUP=0
-    spawn_herdr_presentation_order_lock_release
-  fi
-  spawn_send_key "$T" Enter
+LAUNCH_HOME_TOKEN=$(spawn_launch_home_token "$FM_HOME") || LAUNCH_HOME_TOKEN=
+if [ -z "$LAUNCH_HOME_TOKEN" ]; then
+  echo "error: could not derive a home identity for the staged launch file" >&2
+  exit 1
 fi
+case "$SPAWN_GEN" in
+  *[!A-Za-z0-9.]*|'') echo "error: spawn incarnation token is not a usable launch-file nonce" >&2; exit 1 ;;
+esac
+LAUNCH_DIR="/tmp/fm-$ID+$LAUNCH_HOME_TOKEN"
+if ! (umask 077 && mkdir "$LAUNCH_DIR") 2>/dev/null; then
+  if [ -L "$LAUNCH_DIR" ] || [ ! -d "$LAUNCH_DIR" ] || [ ! -O "$LAUNCH_DIR" ] ||
+    [ -n "$(find "$LAUNCH_DIR" -prune \( -perm -g=w -o -perm -o=w \) -print 2>/dev/null)" ] ||
+    ! chmod 700 "$LAUNCH_DIR"; then
+    echo "error: task launch directory $LAUNCH_DIR already exists and is not a private directory owned by this user; refusing to stage the launch command there; inspect and remove it, then retry" >&2
+    exit 1
+  fi
+fi
+LAUNCH_FILE="$LAUNCH_DIR/launch.$SPAWN_GEN.sh"
+LAUNCH_STAGE="$LAUNCH_DIR/.launch.$SPAWN_GEN.tmp"
+if [ -e "$LAUNCH_FILE" ] || [ -L "$LAUNCH_FILE" ]; then
+  echo "error: task launch file $LAUNCH_FILE already exists; refusing to replace it" >&2
+  exit 1
+fi
+if ! (umask 077 && printf '%s\n' "$LAUNCH" >"$LAUNCH_STAGE" &&
+  chmod 0600 "$LAUNCH_STAGE" && mv -f "$LAUNCH_STAGE" "$LAUNCH_FILE"); then
+  rm -f "$LAUNCH_STAGE"
+  echo "error: could not stage the launch command at $LAUNCH_FILE" >&2
+  exit 1
+fi
+sleep 0.3
+SPAWN_LAUNCH_SENT=1
+spawn_send_literal "$T" ". $(shell_quote "$LAUNCH_FILE")"
+sleep 0.3
+if [ "${HERDR_PROJECTED:-0}" -eq 1 ]; then
+  HERDR_PROJECTION_ABORT_CLEANUP=0
+  spawn_herdr_presentation_order_lock_release
+fi
+spawn_send_key "$T" Enter
 if [ "$HARNESS" = kimi ]; then
   if ! kimi_wait_for_ready; then
     kimi_spawn_fail "$KIMI_READY_FAILURE_DETAIL"
     exit 1
   fi
   KIMI_POINTER="Read the brief at $BRIEF_REAL and follow it exactly."
-  [ "$ORCA_NATIVE_AGENT" != 1 ] || SPAWN_LAUNCH_SENT=1
   KIMI_SUBMIT_RETRIES=${FM_KIMI_SUBMIT_RETRIES:-3}
   KIMI_SUBMIT_SLEEP=${FM_KIMI_SUBMIT_SLEEP:-${FM_KIMI_POLL_INTERVAL:-0.5}}
   KIMI_SUBMIT_SETTLE=${FM_KIMI_SUBMIT_SETTLE:-0}

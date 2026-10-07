@@ -1909,6 +1909,7 @@ result.agentTerminalHandle=<orca terminal handle>
 ```
 
 `orca worktree create --agent <harness>` returns the agent terminal in `result.startupTerminal.handle` on live 1.4.221 and `result.agentTerminalHandle` on older runtimes.
+Firstmate does not use that path yet because the CLI has no verified bridge for the resolved harness launch contract.
 `orca terminal send` advertises both `--wait-submit <seconds>` to observe an accepted prompt without resending and `--retry-request <id>` to reissue a prior prompt id after an ambiguous transport failure.
 `orca terminal wait --for tui-idle --timeout-ms <ms>` is the tui-idle primitive that Firstmate uses when the terminal wait command advertises it.
 
@@ -1917,9 +1918,8 @@ tests/fm-backend-orca.test.sh
 tests/fm-spawn-orca-worktree.test.sh
 ```
 
-The fake-Orca suite covers readiness, registration, create response parsing (now including `result.startupTerminal.handle` and `result.agentTerminalHandle`), metadata routing, popup-safe submit, the native `--agent` worktree path, the shell-terminal fallback for harnesses without an Orca `--agent` id, capability-gated `--wait-submit`/`--retry-request`, capability-gated `terminal wait --for tui-idle`, the GNOME-orca refusal, and path-matched release refusal.
-`fm-spawn-orca-worktree.test.sh` proves a supported native agent receives its launch brief as an agent prompt without shell bootstrap commands.
-It also proves a harness without an Orca `--agent` id falls back to one separate shell terminal.
+The fake-Orca suite covers readiness, registration, create response parsing (now including `result.startupTerminal.handle` and `result.agentTerminalHandle`), metadata routing, popup-safe submit, the profile-preserving shell launch, capability-gated `--wait-submit`/`--retry-request`, capability-gated `terminal wait --for tui-idle`, the GNOME-orca refusal, and path-matched release refusal.
+`fm-spawn-orca-worktree.test.sh` proves an Orca task receives exactly one shell terminal and the resolved launch contract.
 
 ## cmux
 

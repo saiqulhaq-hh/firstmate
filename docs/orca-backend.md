@@ -47,9 +47,9 @@ Orca returns `orca_worktree_id=` as that composite of the Orca repo id and the w
 ## Current lifecycle and safety
 
 Spawn registers the repository and creates an independent worktree.
-For an Orca-native harness, `worktree create --agent` returns the single live agent terminal and Firstmate submits the launch-brief pointer as an agent prompt.
-For another harness, Firstmate creates a shell terminal and runs its normal launch template there.
-Both paths record the returned terminal in task metadata.
+Firstmate creates one shell terminal and runs the resolved harness launch template there.
+The shell terminal is necessary until Orca exposes a configuration bridge for Firstmate's model, effort, safety, lifecycle, and environment contract.
+The terminal is recorded in task metadata.
 Exact command flags and response parsing are owned by `bin/backends/orca.sh` and script help.
 
 `fm-peek.sh` reads with `orca terminal read`.

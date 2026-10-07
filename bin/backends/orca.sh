@@ -198,31 +198,11 @@ fm_backend_orca_repo_ensure() {  # <project-path>
   printf '%s' "$repo_id"
 }
 
-# fm_backend_orca_agent_for_harness: maps a firstmate harness name to the
-# matching Orca --agent id, or the empty string when the harness has no
-# Orca-native TUI agent and the worktree must fall back to a plain shell
-# terminal. Verified supported on the live Linux Orca 1.4.221 host: codex,
-# opencode, claude, pi, kimi, grok, omp. Unsupported on firstmate: pi-signed,
-# muse, rovo, cursor, agy, devin (refused by Orca with "Unknown TUI agent" or
-# "Selected agent is disabled"). Firstmate's other harnesses (pi-signed,
-# muse) intentionally keep the empty-string fallback so the existing shell +
-# type-the-harness-into-the-shell behavior is preserved.
-fm_backend_orca_agent_for_harness() {  # <harness>
-  case "$1" in
-    codex|opencode|claude|pi|kimi|grok|omp) printf '%s\n' "$1" ;;
-    *) return 1 ;;
-  esac
-}
-
-fm_backend_orca_worktree_create() {  # <project-path> <name> [agent]
-  local project=$1 name=$2 agent=${3:-} repo_id out wt_id wt_path terminal bin
+fm_backend_orca_worktree_create() {  # <project-path> <name>
+  local project=$1 name=$2 repo_id out wt_id wt_path terminal bin
   repo_id=$(fm_backend_orca_repo_ensure "$project") || return 1
   bin=$(fm_backend_orca_bin)
-  if [ -n "$agent" ]; then
-    out=$("$bin" worktree create --repo "id:$repo_id" --name "$name" --no-parent --setup skip --agent "$agent" --json) || return 1
-  else
-    out=$("$bin" worktree create --repo "id:$repo_id" --name "$name" --no-parent --setup skip --json) || return 1
-  fi
+  out=$("$bin" worktree create --repo "id:$repo_id" --name "$name" --no-parent --setup skip --json) || return 1
   wt_id=$(printf '%s' "$out" | fm_backend_orca_json_get worktree-id) || {
     echo "error: orca worktree create did not return a worktree id for $name" >&2
     return 1
