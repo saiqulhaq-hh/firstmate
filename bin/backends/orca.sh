@@ -254,7 +254,7 @@ const fs = require("fs");
 let data;
 try { data = JSON.parse(fs.readFileSync(0, "utf8")); } catch (err) { process.exit(0); }
 const r = (data && data.result) || {};
-const candidate = r.requestId || r.request_id || (r.send && (r.send.requestId || r.send.request_id)) || "";
+const candidate = r.requestId || r.request_id || (r.send && (r.send.requestId || r.send.request_id || (r.send.prompt && (r.send.prompt.requestId || r.send.prompt.request_id)))) || "";
 if (typeof candidate === "string" || typeof candidate === "number") process.stdout.write(String(candidate));
 '
 }

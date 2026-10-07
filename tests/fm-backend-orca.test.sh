@@ -269,7 +269,7 @@ test_send_text_submit_retries_when_composer_stays_pending() {
   #   2: composer read (still pending)
   #   3: --retry-request re-send
   #   4: composer read (empty)
-  printf '{"ok":true,"result":{"send":{"handle":"term-123","accepted":true,"requestId":"req-abc"}}}\n' > "$RESP/1.out"
+  printf '{"ok":true,"result":{"send":{"handle":"term-123","accepted":true,"prompt":{"requestId":"req-abc"}}}}\n' > "$RESP/1.out"
   printf '{"ok":true,"result":{"terminal":{"tail":["╭─────────────────╮","│ > hello captain │","╰─────────────────╯"]}}}\n' > "$RESP/2.out"
   printf '{"ok":true,"result":{"send":{"handle":"term-123","accepted":true}}}\n' > "$RESP/3.out"
   printf '{"ok":true,"result":{"terminal":{"tail":["╭─────────────────╮","│ >               │","╰─────────────────╯"]}}}\n' > "$RESP/4.out"
