@@ -1,0 +1,34 @@
+PR: https://github.com/saiqulhaq-hh/fm-live-review-watch-6713-1626411/pull/1
+PR author: saiqulhaq-hh
+Outsider commenter: saiqulhaq
+
+Registration:
+armed: state/review.check.sh
+
+Second contribution poll output:
+contribution-wake: check: contributions review 0a2e4e93df6576e020b3a2d2d1639b5df6b90cd4e89acf1606fac8df94554eb6
+
+Pending public interface:
+[
+  {
+    "token": "comment:6083162672:2026-10-09T14:41:28Z:",
+    "type": "comment",
+    "source": "https://github.com/saiqulhaq-hh/fm-live-review-watch-6713-1626411/pull/1#issuecomment-6083162672",
+    "head": null,
+    "author": "saiqulhaq",
+    "body": "Live outsider review finding: the disposable monitor should surface this comment.",
+    "task": "review",
+    "url": "https://github.com/saiqulhaq-hh/fm-live-review-watch-6713-1626411/pull/1"
+  }
+]
+
+Durable wake queue:
+1791556892	1	check	contribution-0a2e4e93df6576e020b3a2d2d1639b5df6b90cd4e89acf1606fac8df94554eb6	check: contributions review 0a2e4e93df6576e020b3a2d2d1639b5df6b90cd4e89acf1606fac8df94554eb6
+
+Source comment identity from GitHub:
+{
+  "user": "saiqulhaq",
+  "user_type": "User",
+  "author_association": "NONE",
+  "html_url": "https://github.com/saiqulhaq-hh/fm-live-review-watch-6713-1626411/pull/1#issuecomment-6083162672"
+}

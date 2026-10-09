@@ -1,0 +1,21 @@
+Observed PR: https://github.com/hungryhub-team/hh-relay/pull/374
+
+Registration:
+registered: state/contributions.check.sh
+
+Observer output:
+contribution-wake: check: contributions relay374 c5ba009ba42bc17a32ea109be57ee6e673a455af0db3ac0ab36ff8d18c8038d7
+
+Pending public interface:
+[
+  {
+    "token": "comment:6079151595:2026-10-09T10:33:25Z:",
+    "type": "comment",
+    "source": "https://github.com/hungryhub-team/hh-relay/pull/374#issuecomment-6079151595",
+    "head": null,
+    "author": "opencode-agent[bot]",
+    "body": "## Review Summary\n\nThe cleanup scanner + workflow in this PR are well-covered by tests and are appropriately conservative (merged PR / closed non-PR issue only, no deletions, no merges). However, the diff contains a large amount of functionality that the description does not mention, and that functionality ships a new autonomous, write-capable agent into the production ECS runtime. Findings below are grouped by file.\n\n### Scope / PR description mismatch (blocking for review)\n`.github/workflows/c",
+    "task": "relay374",
+    "url": "https://github.com/hungryhub-team/hh-relay/pull/374"
+  }
+]

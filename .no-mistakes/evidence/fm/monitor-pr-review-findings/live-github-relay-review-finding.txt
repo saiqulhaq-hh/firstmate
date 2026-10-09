@@ -1,0 +1,32 @@
+Observed PR: https://github.com/hungryhub-team/hh-relay/pull/433
+
+Registration:
+registered: state/contributions.check.sh
+
+Observer output:
+contribution-wake: check: contributions relay433 75d363ddd84fcfdb83835ce18a6adf350dc52708daec6df467ba7d5392545b72
+contribution-wake: check: contributions relay433 a9ba30f2fabb148a714a78ccdd1f4c0d52a48856adc827ff0959dc67b8b9e1b6
+
+Pending public interface (contains Relay and OpenCode bot findings):
+[
+  {
+    "token": "comment:6077525322:2026-10-09T08:42:26Z:",
+    "type": "comment",
+    "source": "https://github.com/hungryhub-team/hh-relay/pull/433#issuecomment-6077525322",
+    "head": null,
+    "author": "hh-relay[bot]",
+    "body": "/oc review\n\n<!-- relay-auto-review:789faf271938f76e8f6433115e6459faa5605221e67137f074d96e58853cb09f -->",
+    "task": "relay433",
+    "url": "https://github.com/hungryhub-team/hh-relay/pull/433"
+  },
+  {
+    "token": "comment:6077565063:2026-10-09T08:45:10Z:",
+    "type": "comment",
+    "source": "https://github.com/hungryhub-team/hh-relay/pull/433#issuecomment-6077565063",
+    "head": null,
+    "author": "opencode-agent[bot]",
+    "body": "## Review Summary\n\nReviewed the diff against `origin/main` for `app/Relay/pr_webhook.py`, `tests/test_pr_webhook.py`, and `AGENTS.md`. The three exemption helpers are narrow, independently testable, and enforced at the call site as claimed. I traced each suppression path through `handle_pr_opened` and confirmed the invariants hold:\n\n- `_is_release_please_pr` (pr_webhook.py:1744) — title and branch are each sufficient; `^`-anchored patterns reject substring/partial matches.\n- `_is_docs_only` (pr_",
+    "task": "relay433",
+    "url": "https://github.com/hungryhub-team/hh-relay/pull/433"
+  }
+]
