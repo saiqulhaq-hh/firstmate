@@ -1687,7 +1687,15 @@ ${context.command}
       queuedProcessingContent !== null &&
       event.message.content === queuedProcessingContent;
     if (event.messageType !== "user") return;
-    const trimmed = event.prompt.trim();
+    // event.prompt is not guaranteed: the sendCustomMessage path can deliver a
+    // user-type event whose payload lives in event.message instead. Guard all
+    // shapes (string prompt, string content, content blocks) before trimming.
+    const rawPrompt = typeof event.prompt === "string" ? event.prompt
+      : typeof event.message?.content === "string" ? event.message.content
+      : Array.isArray(event.message?.content)
+        ? event.message.content.map((c) => (c && typeof c.text === "string") ? c.text : "").join(" ")
+        : "";
+    const trimmed = rawPrompt.trim();
     if (!trimmed || isOperationalUserText(trimmed)) return;
     const file = currentMainSession.getSessionFile() ?? "";
     const index = mirrorCollection.collectAnchor?.index ?? currentMainSession.getEntries().length;
