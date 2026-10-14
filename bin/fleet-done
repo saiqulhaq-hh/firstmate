@@ -1,0 +1,63 @@
+#!/usr/bin/env python3
+"""fleet-done — aggregate completion events from homes' fleet ledgers.
+
+The done-side counterpart of `fleet-blocker scan`. Reads each home's
+state/fleet-ledger.jsonl (enabled via config/fleet-ledger flag) and prints
+recent completion-type events (merged / done / cleaned / ready) so the manager
+can report "what shipped" without parsing prose.
+
+Usage:
+  fleet-done <fleet-root> [--hours 24] [--json]
+"""
+import argparse, json, os, sys, time
+
+DONE_EVENTS = {"task_done", "pr_ready", "pr_merged", "cleaned_up",
+               "completed", "done", "merged", "delivered"}
+
+
+def main():
+    p = argparse.ArgumentParser()
+    p.add_argument("root")
+    p.add_argument("--hours", type=float, default=24)
+    p.add_argument("--json", action="store_true")
+    args = p.parse_args()
+
+    sess = os.path.join(args.root, "data", "fleet-sessions.json")
+    homes = []
+    if os.path.exists(sess):
+        for h, v in json.load(open(sess)).items():
+            if v.get("cwd") and v["cwd"].rstrip("/") != args.root.rstrip("/"):
+                homes.append((h, v["cwd"]))
+
+    cutoff = time.time() - args.hours * 3600
+    out = []
+    for name, cwd in homes:
+        path = os.path.join(cwd, "state", "fleet-ledger.jsonl")
+        if not os.path.exists(path):
+            continue
+        with open(path) as f:
+            for line in f:
+                try:
+                    r = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if r.get("ts", 0) < cutoff:
+                    continue
+                if r.get("event") in DONE_EVENTS or "done" in str(r.get("event", "")) \
+                   or "merged" in str(r.get("event", "")):
+                    out.append({"home": name, **r})
+
+    out.sort(key=lambda r: r.get("ts", 0))
+    if args.json:
+        print(json.dumps(out, indent=1))
+    else:
+        if not out:
+            print("no completion events in the window (ledgers may still be off)")
+        for r in out:
+            when = time.strftime("%H:%M", time.localtime(r.get("ts", 0)))
+            print("%-18s %-10s %-28s %s" % (r["home"], when,
+                  r.get("event", "?"), str(r.get("task", ""))[:60]))
+
+
+if __name__ == "__main__":
+    main()

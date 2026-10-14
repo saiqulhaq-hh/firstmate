@@ -1,0 +1,196 @@
+#!/usr/bin/env python3
+"""fleet-watch — the manager's watcher daemon (framework fm-watch analogue).
+
+Polls the fleet's deterministic state sources and wakes the manager agent
+(herdr agent prompt to the manager pane) ONLY on actionable deltas:
+
+  - a firstmate home transitions to `done` (unread completion)
+  - a home's latest captain-facing message newly matches the needs-captain
+    heuristic while idle
+  - a new blocker appears in any home's fleet-blocker registry
+  - the captain answers something on the board (answers file grows)
+  - an opencode worker pane transitions working -> idle/done
+
+Noise is absorbed: unchanged states, working agents, repeat events (deduped
+via a state file). Runs as a systemd user service.
+
+Config env: FLEET_ROOT (default cwd), FLEET_WATCH_INTERVAL (default 120s),
+FLEET_WATCH_QUIET (if set, log but don't prompt — dry run).
+"""
+import json, os, subprocess, sys, time
+
+ROOT = os.environ.get("FLEET_ROOT", os.getcwd())
+INTERVAL = int(os.environ.get("FLEET_WATCH_INTERVAL", "120"))
+QUIET = bool(os.environ.get("FLEET_WATCH_QUIET"))
+DATA = os.path.join(ROOT, "data")
+STATE = os.path.join(DATA, "fleet-watch-state.json")
+ANSWERS = os.path.join(DATA, "captain-answers.jsonl")
+SESS_MAP = os.path.join(DATA, "fleet-sessions.json")
+LOG = os.path.join(DATA, "fleet-watch.log")
+
+ATTENTION = ("authoriz", "approv", "decision", "waiting on you", "blocked",
+             "please advise", "please confirm")
+
+
+def log(msg):
+    line = "%s %s\n" % (time.strftime("%H:%M:%S"), msg)
+    with open(LOG, "a") as f:
+        f.write(line)
+
+
+def herdr_json(*args, timeout=60):
+    r = subprocess.run(["herdr", *args], capture_output=True, text=True,
+                       timeout=timeout)
+    return json.loads(r.stdout)
+
+
+def load_state():
+    try:
+        return json.load(open(STATE))
+    except (OSError, json.JSONDecodeError):
+        return {"home_status": {}, "blockers": [], "answers_size": 0,
+                "worker_status": {}, "attention": {}}
+
+
+def save_state(s):
+    tmp = STATE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(s, f)
+    os.replace(tmp, STATE)
+
+
+def manager_pane(agents):
+    for a in agents:
+        if a.get("agent") == "pi" and (a.get("cwd") or "").rstrip("/") == ROOT.rstrip("/"):
+            return a["pane_id"]
+    return None
+
+
+def wake(pane, text):
+    log("WAKE: " + text.splitlines()[0][:100])
+    if QUIET or not pane:
+        return
+    subprocess.run(["herdr", "agent", "prompt", pane,
+                    "[fleet-watch] " + text], capture_output=True, timeout=60)
+
+
+def poll():
+    state = load_state()
+    events = []
+
+    agents = herdr_json("agent", "list")["result"]["agents"]
+    mgr = manager_pane(agents)
+    sess_map = {}
+    if os.path.exists(SESS_MAP):
+        sess_map = json.load(open(SESS_MAP))
+
+    # homes: status transitions + attention heuristic
+    for home, rec in sess_map.items():
+        if not rec.get("cwd"):
+            continue
+        a = next((x for x in agents
+                  if (x.get("cwd") or "").rstrip("/") == rec["cwd"].rstrip("/")
+                  and x.get("agent") == "pi"), None)
+        if not a:
+            continue  # hibernated
+        status = a.get("agent_status", "unknown")
+        prev = state["home_status"].get(home)
+        if prev and prev != status and status == "done":
+            events.append("%s finished a turn (done — unread completion)" % home)
+        if prev and prev != status and status == "idle" and prev == "blocked":
+            events.append("%s unblocked itself (blocked -> idle)" % home)
+        state["home_status"][home] = status
+        if status in ("idle", "done") and not state["attention"].get(home):
+            pane = a["pane_id"]
+            r = subprocess.run(["herdr", "agent", "read", pane, "--source",
+                                "visible", "--lines", "25", "--format", "text"],
+                               capture_output=True, text=True, timeout=30)
+            txt = r.stdout[-1500:]
+            if any(k in txt.lower() for k in ATTENTION) and \
+               "no captain decision" not in txt.lower():
+                state["attention"][home] = True
+                events.append("%s may need a captain decision (check its pane)" % home)
+        elif status == "working":
+            state["attention"].pop(home, None)
+
+    # blockers registry
+    try:
+        r = subprocess.run([os.path.join(ROOT, "bin", "fleet-blocker"), "scan",
+                            ROOT], capture_output=True, text=True, timeout=30)
+        current = [l for l in r.stdout.splitlines() if l.strip()
+                   and not l.startswith("no blockers")]
+        known = set(state["blockers"])
+        for line in current:
+            key = line[:60]
+            if key not in known:
+                events.append("new blocker: " + line.strip()[:160])
+        state["blockers"] = [l[:60] for l in current]
+    except Exception as e:
+        log("blocker scan failed: %s" % e)
+
+    # captain answers
+    try:
+        size = os.path.getsize(ANSWERS)
+        if size > state["answers_size"]:
+            state["answers_size"] = size
+            events.append("captain answered on the board — read bin/captain-answers")
+    except OSError:
+        pass
+
+    # fleet ledgers: completion events (done-side feed)
+    led = state.setdefault("ledger_sizes", {})
+    for home, rec in sess_map.items():
+        cwd = rec.get("cwd", "")
+        if not cwd or cwd.rstrip("/") == ROOT.rstrip("/"):
+            continue
+        path = os.path.join(cwd, "state", "fleet-ledger.jsonl")
+        try:
+            size = os.path.getsize(path)
+        except OSError:
+            continue
+        prev = led.get(home, 0)
+        if size > prev:
+            with open(path, "rb") as f:
+                f.seek(prev)
+                new = [l for l in f.read().decode("utf-8", "replace").splitlines() if l.strip()]
+            for line in new:
+                try:
+                    r = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                ev = str(r.get("event", ""))
+                if any(k in ev for k in ("done", "merged", "cleaned", "ready")):
+                    events.append("%s completed: %s (%s)" % (home, r.get("task", "?"), ev))
+            led[home] = size
+
+    # worker panes (opencode): working -> not working
+    for a in agents:
+        if a.get("agent") != "opencode":
+            continue
+        pane = a["pane_id"]
+        status = a.get("agent_status", "unknown")
+        prev = state["worker_status"].get(pane)
+        if prev == "working" and status in ("idle", "done"):
+            title = (a.get("terminal_title_stripped") or "")[:60]
+            events.append("worker %s finished (%s)" % (pane, title))
+        state["worker_status"][pane] = status
+
+    save_state(state)
+    if events and mgr:
+        wake(mgr, "fleet events:\n" + "\n".join("- " + e for e in events[:8]))
+    elif events:
+        log("(no manager pane) " + "; ".join(events))
+
+
+def main():
+    log("fleet-watch started (interval %ds%s)" % (INTERVAL, ", QUIET" if QUIET else ""))
+    while True:
+        try:
+            poll()
+        except Exception as e:
+            log("poll error: %s" % e)
+        time.sleep(INTERVAL)
+
+
+if __name__ == "__main__":
+    main()
