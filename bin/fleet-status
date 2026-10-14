@@ -1,0 +1,130 @@
+#!/usr/bin/env python3
+"""fleet-status — read-only cross-home monitor for a firstmate-manager fleet.
+
+Discovers pi agents (via herdr) whose cwd is a firstmate home under the fleet
+root, then for each: lifecycle status, latest captain-facing report excerpt,
+and whether the report smells like it needs a captain decision.
+
+Read-only by design: never prompts, focuses, or sends keys.
+
+Usage:
+  fleet-status              one-shot table + excerpts
+  fleet-status --short      table only
+  fleet-status --json       machine-readable
+  fleet-status --watch 30   refresh every N seconds
+
+Environment:
+  FLEET_ROOT   directory containing the firstmate homes (default: cwd)
+               The manager's own session (cwd == FLEET_ROOT) is skipped.
+"""
+import argparse, json, os, re, subprocess, sys, time
+
+ROOT = os.environ.get("FLEET_ROOT", os.getcwd())
+ATTENTION = re.compile(
+    r"(authoriz|approv|decision|may i\b|should i\b|need(s)? (your|captain)|"
+    r"waiting on (you|captain)|blocked|please (advise|confirm|clarify))", re.I)
+CAPTAIN_LINE = re.compile(r"^\s*captain\b", re.I)
+OUTBOUND = re.compile(r"routed through firstmate-manager", re.I)
+NEGATION = re.compile(r"no captain decision|no action (is )?needed|"
+                      r"nothing .{0,30}(need|require)s?", re.I)
+
+
+def herdr(*args, timeout=60):
+    return subprocess.run(["herdr", *args], capture_output=True, text=True,
+                          timeout=timeout)
+
+
+def discover():
+    out = herdr("agent", "list")
+    data = json.loads(out.stdout)
+    fleet = []
+    for a in data["result"]["agents"]:
+        cwd = a.get("cwd") or ""
+        if a.get("agent") != "pi":
+            continue
+        if not cwd.startswith(ROOT + "/"):  # skip the manager itself
+            continue
+        fleet.append({
+            "name": a.get("name") or a["pane_id"],
+            "pane_id": a["pane_id"],
+            "workspace_id": a["workspace_id"],
+            "status": a.get("agent_status", "unknown"),
+            "completion_seq": a.get("completion_seq"),
+            "home": cwd,
+        })
+    return sorted(fleet, key=lambda x: x["home"])
+
+
+def last_captain_report(pane):
+    out = herdr("agent", "read", pane, "--source", "visible",
+                "--lines", "80", "--format", "text", timeout=30)
+    if out.returncode != 0:
+        return None
+    lines = [l.rstrip() for l in out.stdout.splitlines()]
+    start = None
+    for i, l in enumerate(lines):
+        if CAPTAIN_LINE.match(l):
+            start = i  # last "Captain," wins
+    if start is None:
+        return None
+    buf, blanks = [], 0
+    for l in lines[start:]:
+        if not l.strip():
+            blanks += 1
+            if blanks >= 2:
+                break
+            continue
+        blanks = 0
+        buf.append(l)
+    return " ".join(buf)[:300]
+
+
+def needs_captain(text, status):
+    if not text:
+        return False
+    if status in ("working", "blocked"):
+        return False  # excerpt may be stale while busy
+    if OUTBOUND.search(text) or NEGATION.search(text):
+        return False
+    return bool(ATTENTION.search(text))
+
+
+def render(rows, short):
+    print("%-18s %-9s %-8s %s" % ("HOME", "STATUS", "PANE", "HOME PATH"))
+    for r in rows:
+        flag = "  <== NEEDS CAPTAIN" if r["needs_captain"] else ""
+        print("%-18s %-9s %-8s %s%s" % (r["name"], r["status"],
+                                        r["pane_id"], r["home"], flag))
+        if not short and r.get("report"):
+            print("    | %s" % r["report"])
+
+
+def once(short=False, as_json=False):
+    rows = []
+    for a in discover():
+        report = last_captain_report(a["pane_id"])
+        rows.append({**a, "report": report,
+                     "needs_captain": needs_captain(report, a["status"])})
+    if as_json:
+        print(json.dumps(rows, indent=2))
+    else:
+        render(rows, short)
+
+
+def main():
+    p = argparse.ArgumentParser()
+    p.add_argument("--short", action="store_true")
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--watch", type=int, default=0)
+    args = p.parse_args()
+    if args.watch > 0:
+        while True:
+            print("\033[2J\033[H", end="")
+            once(args.short, args.json)
+            time.sleep(args.watch)
+    else:
+        once(args.short, args.json)
+
+
+if __name__ == "__main__":
+    main()

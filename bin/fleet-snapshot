@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+# fleet-snapshot — append a timestamped per-home state snapshot for the fleet.
+#
+# Intended to run unattended (detached loop, cron, or systemd user timer) on
+# the manager host; the manager agent summarizes the snapshots into its
+# captain-facing report when it is active.
+#
+# Per home: lifecycle status via herdr (an agent in `done` status has an
+# unread completion), plus the latest assistant message text parsed from the
+# pi session JSONL (pi message-types: lines are
+# {"type":"message","message":{role:"assistant",content:[{type:"text",...}]}}).
+# Falls back to a screen scrape when the session file is unavailable.
+#
+# Environment:
+#   FLEET_ROOT   directory containing the firstmate homes (default: cwd)
+#   FLEET_OUT    snapshot output directory (default: $FLEET_ROOT/data/fleet-snapshots)
+set -u
+ROOT="${FLEET_ROOT:-$(pwd)}"
+OUT_DIR="${FLEET_OUT:-$ROOT/data/fleet-snapshots}"
+mkdir -p "$OUT_DIR"
+OUT="$OUT_DIR/$(date +%F).jsonl"
+TS="$(date -Iseconds)"
+
+agents_json="$(herdr agent list 2>/dev/null)" || exit 0
+
+python3 - "$agents_json" "$TS" "$OUT" "$ROOT" <<'PY'
+import json, subprocess, sys, os
+
+agents = json.loads(sys.argv[1]).get("result", {}).get("agents") or []
+ts, out_path, root = sys.argv[2], sys.argv[3], sys.argv[4]
+
+def last_assistant_text(path, scan=400):
+    """Last assistant message with non-empty text, walking back `scan` lines."""
+    try:
+        size = os.path.getsize(path)
+        with open(path, "rb") as f:
+            f.seek(max(0, size - 400_000))
+            lines = f.read().decode("utf-8", "replace").splitlines()
+    except OSError:
+        return ""
+    for line in reversed(lines[-scan:]):
+        try:
+            d = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if d.get("type") != "message":
+            continue
+        m = d.get("message") or {}
+        if m.get("role") != "assistant":
+            continue
+        texts = [c.get("text", "") for c in m.get("content") or []
+                 if isinstance(c, dict) and c.get("type") == "text"]
+        text = " ".join(t.strip() for t in texts if t and t.strip())
+        if text:
+            return text[:600]
+    return ""
+
+records = []
+for a in agents:
+    home = (a.get("cwd") or "").rstrip("/")
+    if a.get("agent") != "pi" or not home.startswith(root + "/"):
+        continue
+    pane = a.get("pane_id")
+    name = a.get("name") or home.split("/")[-1]
+    status = a.get("agent_status", "unknown")
+    sess = (a.get("agent_session") or {}).get("value") or ""
+    excerpt = last_assistant_text(sess) if sess else ""
+    if not excerpt and pane:
+        src = "visible" if status in ("working", "blocked") else "recent-unwrapped"
+        try:
+            r = subprocess.run(
+                ["herdr", "agent", "read", pane, "--source", src, "--lines", "12",
+                 "--format", "text"], capture_output=True, text=True, timeout=20)
+            lines = [l for l in r.stdout.splitlines()
+                     if l.strip() and not set(l.strip()) <= set("─")
+                     and not l.startswith(("~", "↑"))]
+            excerpt = " ".join(lines[-4:])[:600]
+        except Exception:
+            excerpt = ""
+    records.append({"ts": ts, "pane": pane, "home": name, "status": status,
+                    "session": sess, "excerpt": excerpt})
+
+with open(out_path, "a") as f:
+    for r in records:
+        f.write(json.dumps(r) + "\n")
+PY
+
+echo "$TS" > "$OUT_DIR/LAST"
