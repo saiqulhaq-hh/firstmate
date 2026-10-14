@@ -1,0 +1,235 @@
+#!/usr/bin/env python3
+"""captain-board — kanban-style captain decision surface, phone-friendly.
+
+Serves the fleet's decision board over HTTP on the machine's Tailscale IP
+(so the captain can open it from a phone browser on the tailnet) and on
+localhost. The captain answers decisions from the browser; answers append to
+data/captain-answers.jsonl and are mirrored onto the card immediately.
+
+Writers contract:
+  - this server owns the `answer` field of each item (via POST /answer)
+  - the manager agent owns everything else (items, sections, log) and updates
+    data/captain-board.json atomically between captain interactions
+  - data/captain-answers.jsonl is the durable answer log the manager processes
+
+Run:  bin/captain-board [--port 8420]
+"""
+import json, os, subprocess, sys, tempfile, time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlparse
+
+ROOT = os.environ.get("FLEET_ROOT", os.getcwd())
+DATA = os.path.join(ROOT, "data")
+BOARD = os.path.join(DATA, "captain-board.json")
+ANSWERS = os.path.join(DATA, "captain-answers.jsonl")
+PORT = int(sys.argv[sys.argv.index("--port") + 1]) if "--port" in sys.argv else 8420
+
+SECTIONS = [("decisions", "Decisions needed", "#d73a49"),
+            ("in_execution", "In execution", "#b8860b"),
+            ("waiting", "Waiting", "#6a737d"),
+            ("resolved", "Resolved", "#22863a")]
+
+
+def load_board():
+    try:
+        with open(BOARD) as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {"sections": {k: [] for k, _, _ in SECTIONS}, "log": []}
+
+
+def save_board(board):
+    fd, tmp = tempfile.mkstemp(dir=DATA, suffix=".tmp")
+    with os.fdopen(fd, "w") as f:
+        json.dump(board, f, indent=1)
+    os.replace(tmp, BOARD)
+
+
+def tailscale_ip():
+    try:
+        return subprocess.run(["tailscale", "ip", "-4"], capture_output=True,
+                              text=True, timeout=5).stdout.strip()
+    except Exception:
+        return ""
+
+
+PAGE = """<!doctype html><html><head><meta name=viewport content="width=device-width,initial-scale=1">
+<title>Captain Board</title><style>
+body{font-family:system-ui,sans-serif;margin:0;background:#0d1117;color:#c9d1d9}
+header{padding:12px 16px;background:#161b22;position:sticky;top:0;display:flex;gap:10px;align-items:center}
+header b{font-size:18px}.ts{color:#8b949e;font-size:12px}
+.board{display:flex;gap:12px;overflow-x:auto;padding:12px;align-items:flex-start}
+.col{min-width:300px;max-width:340px;flex:1;background:#161b22;border-radius:10px;padding:10px}
+.col h2{font-size:14px;margin:4px 2px 10px;color:#fff}
+.card{background:#21262d;border-radius:8px;padding:10px 12px;margin-bottom:10px;border-left:4px solid #6a737d;display:block;text-decoration:none;color:inherit}
+a.card:hover{border-color:#58a6ff;box-shadow:0 0 0 1px #58a6ff}
+.card h3{margin:0 0 6px;font-size:14px;color:#fff}
+.card pre{white-space:pre-wrap;font-size:12px;color:#c9d1d9;margin:0;font-family:inherit}
+.card .ans{font-size:13px;background:#0d1117;border-radius:6px;padding:6px 8px;margin-top:6px}
+.card .ans b{color:#58a6ff}
+.card .cta{color:#58a6ff;font-size:12px;margin-top:6px}
+.log{font-size:12px;color:#8b949e;padding:0 16px 30px}
+.log div{padding:2px 0}
+a{color:#58a6ff}
+.detail{max-width:680px;margin:0 auto;padding:16px}
+.detail h1{font-size:18px;color:#fff;margin:8px 0 4px}
+.detail .sec{font-size:12px;color:#8b949e;margin-bottom:12px}
+.detail pre{white-space:pre-wrap;font-size:14px;background:#161b22;border-radius:10px;padding:14px;font-family:inherit;line-height:1.5}
+.detail textarea{width:100%;box-sizing:border-box;background:#0d1117;border:1px solid #30363d;border-radius:8px;color:#c9d1d9;padding:12px;font-size:16px;font-family:inherit;min-height:140px;resize:vertical}
+.detail textarea:focus{border-color:#58a6ff;outline:none;box-shadow:0 0 0 2px #1f6feb33}
+.detail button{background:#238636;color:#fff;border:0;border-radius:8px;padding:12px;font-size:16px;width:100%;margin-top:10px}
+.detail .ans{font-size:14px;background:#0d1117;border-radius:8px;padding:10px 12px;margin:12px 0;white-space:pre-wrap}
+.detail .ans b{color:#58a6ff}
+.back{display:inline-block;margin-bottom:8px}
+</style></head><body>
+<header><b>⛵ Captain Board</b><span class=ts>__HOST__ · updated __AGO__</span></header>
+<div class=board>__COLS__</div>
+<div class=log><h3 style="color:#fff">Fleet log</h3>__LOG__</div>
+<script>setTimeout(()=>location.reload(),60000)</script>
+</body></html>"""
+
+ITEM_PAGE = """<!doctype html><html><head><meta name=viewport content="width=device-width,initial-scale=1">
+<title>__ID__ — Captain Board</title><style>__CSS__</style></head><body>
+<header><b>⛵ Captain Board</b></header>
+<div class=detail>
+<a class=back href="/">← board</a>
+<h1>__ID__ — __TITLE__</h1><div class=sec>section: __SECTION__</div>
+<pre>__BODY__</pre>
+__ANSWER__
+</div></body></html>"""
+
+
+def esc(s):
+    return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def card(item, color):
+    body = item.get("body", "")
+    excerpt = esc(body[:160] + ("…" if len(body) > 160 else ""))
+    out = ['<a class=card href="/item/%s" style="border-left-color:%s">'
+           % (esc(item["id"]), color),
+           "<h3>%s — %s</h3>" % (esc(item["id"]), esc(item.get("title", ""))),
+           "<pre>%s</pre>" % excerpt]
+    if item.get("answer"):
+        ans = item["answer"]
+        out.append('<div class=ans><b>captain:</b> %s</div>'
+                   % esc(ans[:120] + ("…" if len(ans) > 120 else "")))
+    elif item.get("ask"):
+        out.append('<div class=cta>Tap to read &amp; reply →</div>')
+    out.append("</a>")
+    return "".join(out)
+
+
+class H(BaseHTTPRequestHandler):
+    def _send(self, code, body, ctype="text/html; charset=utf-8"):
+        b = body.encode()
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(b)))
+        self.end_headers()
+        self.wfile.write(b)
+
+    def do_GET(self):
+        parsed = urlparse(self.path)
+        path = parsed.path
+        board = load_board()
+        if path == "/api/board":
+            return self._send(200, json.dumps(board), "application/json")
+        if path.startswith("/item/"):
+            return self._item_page(board, path[6:])
+        if path != "/":
+            return self._send(404, "not found", "text/plain")
+        cols = []
+        for key, title, color in SECTIONS:
+            items = board["sections"].get(key, [])
+            cards = "".join(card(i, color) for i in items) or \
+                '<div class=card><pre>(empty)</pre></div>'
+            cols.append('<div class=col><h2>%s (%d)</h2>%s</div>'
+                        % (title, len(items), cards))
+        log = "".join("<div>%s</div>" % esc(l)
+                      for l in reversed(board.get("log", [])[-30:]))
+        try:
+            ago = int(time.time() - os.path.getmtime(BOARD))
+            ago_s = "%dm%02ds ago" % (ago // 60, ago % 60)
+        except OSError:
+            ago_s = "never"
+        page = (PAGE.replace("__COLS__", "".join(cols))
+                    .replace("__LOG__", log)
+                    .replace("__HOST__", tailscale_ip() or "localhost")
+                    .replace("__AGO__", ago_s))
+        self._send(200, page)
+
+    def _item_page(self, board, item_id):
+        for sec_key, sec_title, _ in SECTIONS:
+            for it in board["sections"].get(sec_key, []):
+                if it.get("id") == item_id:
+                    if it.get("answer"):
+                        ans = ('<div class=ans><b>captain:</b> %s</div>'
+                               % esc(it["answer"]))
+                    else:
+                        ans = ('<form method=POST action="/answer">'
+                               '<input type=hidden name=id value="%s">'
+                               '<input type=hidden name=back value="/item/%s">'
+                               '<textarea name=text placeholder="Type your answer… multi-line ok" '
+                               'autofocus required></textarea>'
+                               "<button>Submit answer</button></form>"
+                               % (esc(it["id"]), esc(it["id"])))
+                    css = PAGE.split("<style>")[1].split("</style>")[0]
+                    page = (ITEM_PAGE.replace("__CSS__", css)
+                            .replace("__ID__", esc(it["id"]))
+                            .replace("__TITLE__", esc(it.get("title", "")))
+                            .replace("__SECTION__", esc(sec_title))
+                            .replace("__BODY__", esc(it.get("body", "")))
+                            .replace("__ANSWER__", ans))
+                    return self._send(200, page)
+        return self._send(404, "unknown item", "text/plain")
+
+    def do_POST(self):
+        if urlparse(self.path).path != "/answer":
+            return self._send(404, "not found", "text/plain")
+        length = int(self.headers.get("Content-Length", 0))
+        form = parse_qs(self.rfile.read(length).decode())
+        item_id = (form.get("id") or [""])[0].strip()
+        text = (form.get("text") or [""])[0].strip()
+        if item_id and text:
+            os.makedirs(DATA, exist_ok=True)
+            with open(ANSWERS, "a") as f:
+                f.write(json.dumps({"ts": time.time(), "id": item_id,
+                                    "answer": text}) + "\n")
+            board = load_board()
+            for items in board["sections"].values():
+                for it in items:
+                    if it.get("id") == item_id:
+                        it["answer"] = text
+            save_board(board)
+        back = (form.get("back") or ["/"])[0]
+        if not back.startswith("/"):
+            back = "/"
+        self.send_response(303)
+        self.send_header("Location", back)
+        self.end_headers()
+
+    def log_message(self, *a):
+        pass
+
+
+if __name__ == "__main__":
+    import threading
+    os.makedirs(DATA, exist_ok=True)
+    if not os.path.exists(BOARD):
+        save_board(load_board())
+    ts = tailscale_ip()
+    binds = ["127.0.0.1"] + ([ts] if ts else [])
+    servers = []
+    for host in binds:
+        s = ThreadingHTTPServer((host, PORT), H)
+        servers.append(s)
+        threading.Thread(target=s.serve_forever, daemon=True).start()
+        print("captain-board listening on http://%s:%d" % (host, PORT))
+    if ts:
+        print("phone: http://%s:%d (tailnet only)" % (ts, PORT))
+    try:
+        while True:
+            time.sleep(3600)
+    except KeyboardInterrupt:
+        pass
