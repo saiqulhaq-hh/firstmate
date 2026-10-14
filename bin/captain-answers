@@ -1,0 +1,114 @@
+#!/usr/bin/env python3
+"""captain-answers — read answers posted via the captain board.
+
+The board server appends every answer to data/captain-answers.jsonl. This
+script is the manager-side reader: show what the captain answered, filter by
+decision id or time, and track which answers have already been processed via
+a cursor file.
+
+Usage:
+  captain-answers                 # new (unprocessed) answers, oldest first
+  captain-answers --all           # everything, including processed
+  captain-answers --id D17        # answers for one decision
+  captain-answers --since 13:00   # answers after a time today (HH:MM) or ISO ts
+  captain-answers --mark-read     # after printing: advance the read cursor
+  captain-answers --json          # machine-readable
+  captain-answers --stats         # counts per decision id
+
+Environment:
+  FLEET_ROOT   fleet root containing data/captain-answers.jsonl (default: cwd)
+
+Cursor: data/captain-answers.cursor holds the byte offset of the last
+processed answer, so "new" survives restarts and compactions.
+"""
+import argparse, json, os, re, sys, time
+
+ROOT = os.environ.get("FLEET_ROOT", os.getcwd())
+ANSWERS = os.path.join(ROOT, "data", "captain-answers.jsonl")
+CURSOR = os.path.join(ROOT, "data", "captain-answers.cursor")
+
+
+def read_cursor():
+    try:
+        return int(open(CURSOR).read().strip())
+    except (OSError, ValueError):
+        return 0
+
+
+def write_cursor(offset):
+    with open(CURSOR, "w") as f:
+        f.write(str(offset))
+
+
+def load(offset=0):
+    """Answers at byte offset >= offset. Returns (records, end_offset)."""
+    records = []
+    if not os.path.exists(ANSWERS):
+        return records, 0
+    with open(ANSWERS, "rb") as f:
+        f.seek(offset)
+        for line in f:
+            try:
+                records.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+        return records, f.tell()
+
+
+def fmt_ts(ts):
+    return time.strftime("%Y-%m-%d %H:%M", time.localtime(ts))
+
+
+def main():
+    p = argparse.ArgumentParser()
+    p.add_argument("--all", action="store_true")
+    p.add_argument("--id", default="")
+    p.add_argument("--since", default="")
+    p.add_argument("--mark-read", action="store_true")
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--stats", action="store_true")
+    p.add_argument("--include-tests", action="store_true")
+    args = p.parse_args()
+
+    offset = 0 if (args.all or args.id or args.since or args.stats) else read_cursor()
+    records, end = load(offset)
+
+    if not args.include_tests:
+        records = [r for r in records if not str(r.get("id", "")).startswith("TEST")]
+    if args.id:
+        records = [r for r in records if r.get("id") == args.id]
+    if args.since:
+        m = re.match(r"^(\d{1,2}):(\d{2})$", args.since)
+        if m:
+            today = time.strftime("%Y-%m-%d")
+            cutoff = time.mktime(time.strptime("%s %s" % (today, args.since),
+                                               "%Y-%m-%d %H:%M"))
+        else:
+            cutoff = time.mktime(time.strptime(args.since[:16], "%Y-%m-%dT%H:%M"))
+        records = [r for r in records if r.get("ts", 0) >= cutoff]
+
+    if args.stats:
+        counts = {}
+        for r in records:
+            counts[r.get("id", "?")] = counts.get(r.get("id", "?"), 0) + 1
+        for k in sorted(counts):
+            print("%-8s %d" % (k, counts[k]))
+        return
+
+    if args.json:
+        print(json.dumps(records, indent=1))
+    else:
+        if not records:
+            print("no new answers" if not args.all else "no answers")
+        for r in records:
+            print("=" * 10, "%s  (%s)" % (r.get("id", "?"), fmt_ts(r.get("ts", 0))),
+                  "=" * 10)
+            print(r.get("answer", ""))
+            print()
+
+    if args.mark_read and not (args.all or args.id or args.since):
+        write_cursor(end)
+
+
+if __name__ == "__main__":
+    main()
