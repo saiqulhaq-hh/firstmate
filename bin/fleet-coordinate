@@ -1,0 +1,150 @@
+#!/usr/bin/env python3
+"""fleet-coordinate — synchronous multi-home coordination for the manager.
+
+Fans a prompt out to several firstmate homes at once, then fans their answers
+in — one invocation = one full coordination round trip, instead of async drift
+across manager turns. Hibernated homes are resumed first per the AGENTS.md
+runbook (fresh workspace + pi --session).
+
+Usage:
+  fleet-coordinate --home qa-team --home cosmos-team \
+      --prompt "state of run X?" [--timeout 600] [--json]
+  fleet-coordinate --prompts-file f.json   # {"home": "prompt", ...}
+
+Answers are detected as the first new assistant text message in the home's pi
+session JSONL written after the prompt was submitted, once the agent returns
+to idle/done. Output: per-home answer text (truncated) or TIMEOUT.
+"""
+import argparse, json, os, subprocess, sys, time
+
+ROOT = os.environ.get("FLEET_ROOT", os.getcwd())
+SESS_MAP = os.path.join(ROOT, "data", "fleet-sessions.json")
+
+
+def herdr(*args, timeout=120):
+    return subprocess.run(["herdr", *args], capture_output=True, text=True,
+                          timeout=timeout)
+
+
+def live_agents():
+    out = herdr("agent", "list")
+    by_home = {}
+    for a in json.loads(out.stdout)["result"]["agents"]:
+        if a.get("agent") == "pi":
+            by_home[(a.get("cwd") or "").rstrip("/")] = a
+    return by_home
+
+
+def resume(home, rec):
+    """Hibernated home -> fresh workspace + resumed pi session. Returns pane."""
+    out = herdr("workspace", "create", "--cwd", rec["cwd"], "--label", home,
+                "--no-focus")
+    r = json.loads(out.stdout)["result"]
+    pane = r["root_pane"]["pane_id"]
+    out = herdr("agent", "start", home, "--kind", "pi", "--pane", pane,
+                "--timeout", "90000", "--", "--session", rec["session_path"],
+                "--approve", timeout=120)
+    a = json.loads(out.stdout).get("result", {}).get("agent", {})
+    if a.get("agent_status") not in ("idle", "done"):
+        raise RuntimeError("resume of %s did not settle: %s" % (home, out.stdout[:200]))
+    return pane
+
+
+def last_assistant_after(sess_path, t0):
+    """Latest assistant text with file mtime/message ts after t0."""
+    try:
+        size = os.path.getsize(sess_path)
+        with open(sess_path, "rb") as f:
+            f.seek(max(0, size - 500_000))
+            lines = f.read().decode("utf-8", "replace").splitlines()
+    except OSError:
+        return ""
+    for line in reversed(lines[-500:]):
+        try:
+            d = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if d.get("type") != "message":
+            continue
+        m = d.get("message") or {}
+        if m.get("role") != "assistant":
+            continue
+        ts = m.get("timestamp") or 0
+        if ts and ts < t0 * 1000:  # pi timestamps are ms
+            continue
+        texts = [c.get("text", "") for c in m.get("content") or []
+                 if isinstance(c, dict) and c.get("type") == "text"]
+        t = " ".join(x.strip() for x in texts if x.strip())
+        if t:
+            return t
+    return ""
+
+
+def main():
+    p = argparse.ArgumentParser()
+    p.add_argument("--home", action="append", default=[])
+    p.add_argument("--prompt", default="")
+    p.add_argument("--prompts-file", default="")
+    p.add_argument("--timeout", type=int, default=600)
+    p.add_argument("--json", action="store_true")
+    args = p.parse_args()
+
+    prompts = {}
+    if args.prompts_file:
+        prompts = json.load(open(args.prompts_file))
+    for h in args.home:
+        prompts[h] = args.prompt
+    if not prompts or not all(prompts.values()):
+        p.error("need --home+--prompt or --prompts-file")
+
+    sess_map = json.load(open(SESS_MAP))
+    live = live_agents()
+    targets = {}  # home -> {pane, session}
+    for home in prompts:
+        rec = sess_map.get(home)
+        a = live.get((rec or {}).get("cwd", ""))
+        if a:
+            targets[home] = {"pane": a["pane_id"],
+                             "session": (a.get("agent_session") or {}).get("value")}
+        elif rec:
+            print("resuming hibernated home:", home, file=sys.stderr)
+            pane = resume(home, rec)
+            targets[home] = {"pane": pane, "session": rec["session_path"]}
+        else:
+            print("UNKNOWN HOME (no session record):", home, file=sys.stderr)
+
+    t0 = time.time()
+    for home, text in prompts.items():
+        if home in targets:
+            herdr("agent", "prompt", targets[home]["pane"], text)
+
+    deadline = t0 + args.timeout
+    answers = {}
+    while time.time() < deadline and len(answers) < len(targets):
+        time.sleep(10)
+        live = live_agents()
+        for home, t in targets.items():
+            if home in answers:
+                continue
+            a = live.get((sess_map.get(home) or {}).get("cwd", ""))
+            status = a.get("agent_status") if a else None
+            if status not in ("idle", "done"):
+                continue
+            sess = (a.get("agent_session") or {}).get("value") or t["session"]
+            text = last_assistant_after(sess, t0)
+            if text:
+                answers[home] = text
+    for home in targets:
+        answers.setdefault(home, "TIMEOUT")
+
+    if args.json:
+        print(json.dumps(answers, indent=1))
+    else:
+        for home, text in answers.items():
+            print("=" * 15, home, "=" * 15)
+            print(text[:1500])
+            print()
+
+
+if __name__ == "__main__":
+    main()

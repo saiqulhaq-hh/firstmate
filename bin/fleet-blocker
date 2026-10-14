@@ -1,0 +1,112 @@
+#!/usr/bin/env python3
+"""fleet-blocker — deterministic blocker registry for firstmate homes.
+
+Homes record blockers as data, not prose, so the manager's sweep reads
+structure instead of interpreting messages.
+
+Usage (from a firstmate home, or with --home <path>):
+  fleet-blocker add <task-id> --on captain|manager|<home>|external \
+      --need "what is needed" [--note "context"]
+  fleet-blocker list
+  fleet-blocker clear <task-id>
+  fleet-blocker scan <root>     # manager: aggregate across homes
+
+Store: <home>/state/fleet-blockers.json — {"blockers": [...]}.
+Rules: one record per task (add updates in place); `since` is set on first add
+and preserved on update; clear removes. Ids are free-form but should be the
+task id (tasks-axi / ClickUp / backlog id).
+"""
+import argparse, json, os, sys, time
+
+def store_path(home):
+    return os.path.join(home, "state", "fleet-blockers.json")
+
+def load(home):
+    try:
+        with open(store_path(home)) as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {"blockers": []}
+
+def save(home, data):
+    os.makedirs(os.path.join(home, "state"), exist_ok=True)
+    tmp = store_path(home) + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(data, f, indent=1)
+    os.replace(tmp, store_path(home))
+
+def cmd_add(home, task, on, need, note):
+    data = load(home)
+    now = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+    for b in data["blockers"]:
+        if b["task"] == task:
+            b.update({"on": on, "need": need, "note": note or b.get("note", ""),
+                      "updated": now})
+            break
+    else:
+        data["blockers"].append({"task": task, "on": on, "need": need,
+                                 "note": note or "", "since": now,
+                                 "updated": now})
+    save(home, data)
+    print("recorded: %s blocked on %s" % (task, on))
+
+def cmd_list(home):
+    for b in load(home)["blockers"]:
+        print("%-28s on=%-10s since=%s  %s" % (b["task"], b["on"],
+                                               b["since"], b["need"][:70]))
+
+def cmd_clear(home, task):
+    data = load(home)
+    data["blockers"] = [b for b in data["blockers"] if b["task"] != task]
+    save(home, data)
+    print("cleared:", task)
+
+def cmd_scan(root):
+    """Aggregate blockers across homes under root (and its sessions map)."""
+    homes = []
+    sess = os.path.join(root, "data", "fleet-sessions.json")
+    if os.path.exists(sess):
+        for h, v in json.load(open(sess)).items():
+            # skip the manager's own entry (its cwd IS the root)
+            if v.get("cwd", "").rstrip("/") != root.rstrip("/") and v.get("cwd"):
+                homes.append((h, v["cwd"]))
+    else:
+        for name in sorted(os.listdir(root)):
+            p = os.path.join(root, name)
+            if os.path.isdir(p) and os.path.exists(os.path.join(p, "config", "backend")):
+                homes.append((name, p))
+    found = False
+    for name, cwd in homes:
+        for b in load(cwd)["blockers"]:
+            found = True
+            print("%-16s %-28s on=%-10s since=%s  %s"
+                  % (name, b["task"], b["on"], b["since"], b["need"][:60]))
+    if not found:
+        print("no blockers recorded")
+
+def main():
+    p = argparse.ArgumentParser()
+    p.add_argument("--home", default=os.getcwd())
+    sub = p.add_subparsers(dest="cmd", required=True)
+    a = sub.add_parser("add")
+    a.add_argument("task")
+    a.add_argument("--on", required=True)
+    a.add_argument("--need", required=True)
+    a.add_argument("--note", default="")
+    sub.add_parser("list")
+    c = sub.add_parser("clear")
+    c.add_argument("task")
+    s = sub.add_parser("scan")
+    s.add_argument("root")
+    args = p.parse_args()
+    if args.cmd == "add":
+        cmd_add(args.home, args.task, args.on, args.need, args.note)
+    elif args.cmd == "list":
+        cmd_list(args.home)
+    elif args.cmd == "clear":
+        cmd_clear(args.home, args.task)
+    else:
+        cmd_scan(args.root)
+
+if __name__ == "__main__":
+    main()
