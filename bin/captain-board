@@ -213,17 +213,20 @@ class H(BaseHTTPRequestHandler):
         for sec_key, sec_title, _ in SECTIONS:
             for it in board["sections"].get(sec_key, []):
                 if it.get("id") == item_id:
+                    ans = ""
                     if it.get("answer"):
                         ans = ('<div class=ans><b>captain:</b> %s</div>'
                                % esc(it["answer"]))
-                    else:
-                        ans = ('<form method=POST action="/answer">'
-                               '<input type=hidden name=id value="%s">'
-                               '<input type=hidden name=back value="/item/%s">'
-                               '<textarea name=text placeholder="Type your answer… multi-line ok" '
-                               'autofocus required></textarea>'
-                               "<button>Submit answer</button></form>"
-                               % (esc(it["id"]), esc(it["id"])))
+                    ans += ('<form method=POST action="/answer">'
+                            '<input type=hidden name=id value="%s">'
+                            '<input type=hidden name=back value="/item/%s">'
+                            '<textarea name=text placeholder="%s" '
+                            'autofocus required></textarea>'
+                            "<button>%s</button></form>"
+                            % (esc(it["id"]), esc(it["id"]),
+                               "Type your answer… multi-line ok" if not it.get("answer")
+                               else "Revise or add to your answer…",
+                               "Submit answer" if not it.get("answer") else "Update answer"))
                     css = PAGE.split("<style>")[1].split("</style>")[0]
                     page = (ITEM_PAGE.replace("__CSS__", css)
                             .replace("__ID__", esc(it["id"]))
