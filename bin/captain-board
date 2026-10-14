@@ -14,7 +14,7 @@ Writers contract:
 
 Run:  bin/captain-board [--port 8420]
 """
-import json, os, subprocess, sys, tempfile, time
+import json, os, re, subprocess, sys, tempfile, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -74,7 +74,11 @@ a{color:#58a6ff}
 .detail{max-width:680px;margin:0 auto;padding:16px}
 .detail h1{font-size:18px;color:#fff;margin:8px 0 4px}
 .detail .sec{font-size:12px;color:#8b949e;margin-bottom:12px}
-.detail pre{white-space:pre-wrap;font-size:14px;background:#161b22;border-radius:10px;padding:14px;font-family:inherit;line-height:1.5}
+.detail .body{font-size:14px;background:#161b22;border-radius:10px;padding:14px;line-height:1.6}
+.detail .body p{margin:0 0 12px}
+.detail .body ul,.detail .body ol{margin:0 0 12px;padding-left:22px}
+.detail .body li{margin-bottom:6px}
+.detail .body strong{color:#fff}
 .detail textarea{width:100%;box-sizing:border-box;background:#0d1117;border:1px solid #30363d;border-radius:8px;color:#c9d1d9;padding:12px;font-size:16px;font-family:inherit;min-height:140px;resize:vertical}
 .detail textarea:focus{border-color:#58a6ff;outline:none;box-shadow:0 0 0 2px #1f6feb33}
 .detail button{background:#238636;color:#fff;border:0;border-radius:8px;padding:12px;font-size:16px;width:100%;margin-top:10px}
@@ -94,13 +98,59 @@ ITEM_PAGE = """<!doctype html><html><head><meta name=viewport content="width=dev
 <div class=detail>
 <a class=back href="/">← board</a>
 <h1>__ID__ — __TITLE__</h1><div class=sec>section: __SECTION__</div>
-<pre>__BODY__</pre>
+<div class=body>__BODY__</div>
 __ANSWER__
 </div></body></html>"""
 
 
 def esc(s):
     return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def render_body(text):
+    """Light markup: paragraphs, - bullets, 1) numbered items, **bold**, links."""
+    out, para, lst, ltype = [], [], [], None
+
+    def flush_para():
+        nonlocal para
+        if para:
+            out.append("<p>%s</p>" % " ".join(para))
+            para = []
+
+    def flush_list():
+        nonlocal lst, ltype
+        if lst:
+            out.append("<%s>%s</%s>" % (ltype, "".join(lst), ltype))
+            lst, ltype = [], None
+
+    def inline(s):
+        s = esc(s)
+        s = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", s)
+        s = re.sub(r"(https?://[^\s)]+)", r'<a href="\1" target="_blank">\1</a>', s)
+        return s
+
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        if not line:
+            flush_para(); flush_list(); continue
+        m = re.match(r"^(?:[-•])\s+(.*)$", line)
+        n = re.match(r"^(\d+)[\).]\s+(.*)$", line)
+        if m:
+            flush_para()
+            if ltype not in (None, "ul"):
+                flush_list()
+            ltype = "ul"; lst.append("<li>%s</li>" % inline(m.group(1)))
+        elif n:
+            flush_para()
+            if ltype not in (None, "ol"):
+                flush_list()
+            ltype = "ol"
+            lst.append('<li value="%s">%s</li>' % (n.group(1), inline(n.group(2))))
+        else:
+            flush_list()
+            para.append(inline(line))
+    flush_para(); flush_list()
+    return "".join(out)
 
 
 def card(item, color):
@@ -179,7 +229,7 @@ class H(BaseHTTPRequestHandler):
                             .replace("__ID__", esc(it["id"]))
                             .replace("__TITLE__", esc(it.get("title", "")))
                             .replace("__SECTION__", esc(sec_title))
-                            .replace("__BODY__", esc(it.get("body", "")))
+                            .replace("__BODY__", render_body(it.get("body", "")))
                             .replace("__ANSWER__", ans))
                     return self._send(200, page)
         return self._send(404, "unknown item", "text/plain")
