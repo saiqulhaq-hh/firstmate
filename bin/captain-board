@@ -82,7 +82,8 @@ a{color:#58a6ff}
 .detail .body strong{color:#fff}
 .detail textarea{width:100%;box-sizing:border-box;background:#0d1117;border:1px solid #30363d;border-radius:8px;color:#c9d1d9;padding:12px;font-size:16px;font-family:inherit;min-height:140px;resize:vertical}
 .detail textarea:focus{border-color:#58a6ff;outline:none;box-shadow:0 0 0 2px #1f6feb33}
-.detail button{background:#238636;color:#fff;border:0;border-radius:8px;padding:12px;font-size:16px;width:100%;margin-top:10px}
+.detail form{padding-bottom:max(12px,env(safe-area-inset-bottom))}
+.detail button{background:#238636;color:#fff;border:0;border-radius:8px;padding:12px;font-size:16px;width:100%;margin-top:10px;position:sticky;bottom:max(8px,env(safe-area-inset-bottom));box-shadow:0 -4px 12px #0d111799}
 .detail .ans{font-size:14px;background:#0d1117;border-radius:8px;padding:10px 12px;margin:12px 0;white-space:pre-wrap}
 .detail .ans b{color:#58a6ff}
 .back{display:inline-block;margin-bottom:8px}
@@ -222,8 +223,8 @@ class H(BaseHTTPRequestHandler):
                             '<input type=hidden name=id value="%s">'
                             '<input type=hidden name=back value="/item/%s">'
                             '<textarea name=text placeholder="%s" '
-                            'autofocus required></textarea>'
-                            "<button>%s</button></form>"
+                            'enterkeyhint="send" required></textarea>'
+                            "<button type=submit>%s</button></form>"
                             % (esc(it["id"]), esc(it["id"]),
                                "Type your answer… multi-line ok" if not it.get("answer")
                                else "Revise or add to your answer…",
