@@ -27,7 +27,8 @@ PORT = int(sys.argv[sys.argv.index("--port") + 1]) if "--port" in sys.argv else 
 SECTIONS = [("decisions", "Decisions needed", "#d73a49"),
             ("in_execution", "In execution", "#b8860b"),
             ("waiting", "Waiting", "#6a737d"),
-            ("resolved", "Resolved", "#22863a")]
+            ("resolved", "Resolved", "#22863a"),
+            ("done", "Done", "#8957e5")]
 
 
 def load_board():

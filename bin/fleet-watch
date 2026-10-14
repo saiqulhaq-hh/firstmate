@@ -137,6 +137,32 @@ def poll():
     except OSError:
         pass
 
+    # fleet ledgers: completion events (done-side feed)
+    led = state.setdefault("ledger_sizes", {})
+    for home, rec in sess_map.items():
+        cwd = rec.get("cwd", "")
+        if not cwd or cwd.rstrip("/") == ROOT.rstrip("/"):
+            continue
+        path = os.path.join(cwd, "state", "fleet-ledger.jsonl")
+        try:
+            size = os.path.getsize(path)
+        except OSError:
+            continue
+        prev = led.get(home, 0)
+        if size > prev:
+            with open(path, "rb") as f:
+                f.seek(prev)
+                new = [l for l in f.read().decode("utf-8", "replace").splitlines() if l.strip()]
+            for line in new:
+                try:
+                    r = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                ev = str(r.get("event", ""))
+                if any(k in ev for k in ("done", "merged", "cleaned", "ready")):
+                    events.append("%s completed: %s (%s)" % (home, r.get("task", "?"), ev))
+            led[home] = size
+
     # worker panes (opencode): working -> not working
     for a in agents:
         if a.get("agent") != "opencode":
