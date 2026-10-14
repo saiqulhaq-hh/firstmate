@@ -2,25 +2,35 @@
 
 When a firstmate-manager agent supervises several firstmate homes, the captain
 (the human) needs one stable place to see what needs their decision and to
-answer in writing. This page describes the convention; a companion
-implementation lives in `bin/fleet-status` and `bin/fleet-snapshot`.
+answer in writing. This page describes the convention; companion
+implementations live in `bin/captain-board` (interactive web UI),
+`bin/fleet-status`, and `bin/fleet-snapshot`.
 
-## The file
+## The board (primary surface)
 
-The manager keeps a `captain-report.md` at the fleet root and rewrites the
-machine-generated parts on every sweep. The captain's own edits are never
-overwritten: answers stay put, sections only gain content.
+`bin/captain-board` serves a kanban-style board over HTTP on the machine's
+Tailscale IP and localhost, so the captain can review and answer decisions
+from a phone browser on the tailnet:
 
-### Format rules
+- Columns: **Decisions needed · In execution · Waiting · Resolved**, plus a
+  fleet log.
+- Cards are clickable: the detail page shows the full description and a large
+  multi-line answer box. Answers append to `data/captain-answers.jsonl` (the
+  durable record the manager processes) and mirror onto the card immediately.
+- State lives in `data/captain-board.json`. Writers contract: the server owns
+  each item's `answer` field; the manager agent owns everything else and
+  updates the file atomically between captain interactions. There is no
+  double-writer conflict, unlike a shared Markdown file.
+- Run it under `systemd-run --user` (or any supervisor) so it outlives the
+  manager agent's session: `systemd-run --user --unit=captain-board
+  bin/captain-board --port 8420`.
 
-- **H1 for sections, H2 per item — never tables.** The captain manages this
-  file by hand; headings survive edits better than table rows.
-- Every decision item carries a `captain:` line. The captain answers by
-  editing that line (`captain: merge it`) and telling the manager "replied".
-  The manager acts on every filled line, records the execution receipt inline,
-  and moves the item to `# Resolved` on the next sweep.
-- Section order: `# Decisions needed` → `# In execution` → `# Waiting` →
-  `# Fleet status` → `# Resolved` → `# Fleet log`.
+## The file (export / fallback)
+
+The manager may additionally keep a `captain-report.md` at the fleet root as a
+human-readable export of the same state (useful for git history and offline
+reading). When both exist, the board is authoritative for answers and the file
+is regenerated from it — the captain never edits the file by hand.
 
 ### Snapshot pipeline
 
