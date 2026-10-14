@@ -1,4 +1,4 @@
-# Captain report — the captain-facing decision surface
+# Captain board — the captain-facing decision surface
 
 When a firstmate-manager agent supervises several firstmate homes, the captain
 (the human) needs one stable place to see what needs their decision and to
@@ -25,12 +25,12 @@ from a phone browser on the tailnet:
   manager agent's session: `systemd-run --user --unit=captain-board
   bin/captain-board --port 8420`.
 
-## The file (export / fallback)
+## The Markdown export (optional fallback)
 
-The manager may additionally keep a `captain-report.md` at the fleet root as a
-human-readable export of the same state (useful for git history and offline
-reading). When both exist, the board is authoritative for answers and the file
-is regenerated from it — the captain never edits the file by hand.
+The manager may additionally regenerate a `captain-report.md` at the fleet
+root from the board state (useful for git history and offline reading). The
+board is authoritative for answers; the captain never edits the export by
+hand. If no export is wanted, skip it — the board alone is sufficient.
 
 ### Snapshot pipeline
 
