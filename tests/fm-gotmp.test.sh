@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Behavior tests for per-task GOTMPDIR support (fm-gotmp).
 #
-# fm-spawn gives each task a temp root /tmp/fm-<id>/ with Go's build temp nested at
+# fm-spawn gives each task a temp root <TMPDIR>/fm-<id>/ with Go's build temp nested at
 # gotmp/, exports GOTMPDIR into the crewmate pane, and records tasktmp= in the task's
-# meta. fm-teardown reads tasktmp= and removes the whole root on cleanup.
+# meta. fm-teardown reads tasktmp=, removes the whole root, and derives the sibling
+# staged launch namespace from the recorded root instead of assuming /tmp.
 #
 # These tests exercise fm-teardown directly as a subprocess against a fake FM_HOME/FM_ROOT
 # built so the real script resolves into it, with stub helper scripts.
@@ -247,6 +248,34 @@ test_teardown_skips_gracefully_when_dir_missing() {
   pass "fm-teardown skips gracefully when tasktmp= points to a nonexistent dir"
 }
 
+test_teardown_removes_tmpdir_launch_namespace() {
+  local id=td-launch-tmpdir-z5
+  local tmp_base="$TMP_ROOT/tmp-base-$id"
+  local task_tmp="$tmp_base/fm-$id"
+  local fake launch_dir launch_file root hash
+  mkdir -p "$task_tmp/gotmp"
+  fake=$(make_fake_root "$id" "$task_tmp")
+  root=$(cd "$fake" && pwd -P)
+  if command -v shasum >/dev/null 2>&1; then
+    hash=$(printf '%s' "$root" | shasum -a 256 | awk '{print $1}')
+  else
+    hash=$(printf '%s' "$root" | sha256sum | awk '{print $1}')
+  fi
+  launch_dir="$tmp_base/fm-$id+$hash"
+  mkdir -p "$launch_dir"
+  launch_file="$launch_dir/launch.test.sh"
+  printf 'staged launch\n' > "$launch_file"
+
+  FM_HOME="$fake" bash "$fake/bin/fm-teardown.sh" "$id" >/dev/null 2>&1 \
+    || fail "teardown exited non-zero with a TMPDIR-backed tasktmp"
+  [ ! -e "$task_tmp" ] \
+    || fail "teardown left the TMPDIR-backed tasktmp dir"
+  [ ! -e "$launch_dir" ] \
+    || fail "teardown left the TMPDIR-backed launch namespace"
+  pass "fm-teardown derives the staged launch namespace from tasktmp= instead of assuming /tmp"
+}
+
 test_teardown_removes_tasktmp_dir
 test_teardown_skips_gracefully_without_tasktmp
 test_teardown_skips_gracefully_when_dir_missing
+test_teardown_removes_tmpdir_launch_namespace

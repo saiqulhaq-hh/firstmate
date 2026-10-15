@@ -3828,11 +3828,20 @@ fi
 remove_grok_turnend_auth "$STATE" "$ID" || exit 1
 remove_kimi_turnend_auth "$STATE" "$ID" || exit 1
 fm_backend_clear_transition "$BACKEND" "$STATE" "$T" || true
-# Remove the per-task temp root (/tmp/fm-<id>/, incl. its gotmp/) recorded by spawn.
+# Remove the per-task temp root (<TMPDIR>/fm-<id>/, incl. its gotmp/) recorded by spawn.
 # Read before the state-file rm below; empty (pre-fix tasks without tasktmp=) is a no-op.
 [ -n "$TASK_TMP" ] && rm -rf "$TASK_TMP"
 # Retire only this Firstmate home's launch namespace. Its never-reused per-spawn
-# files leave the equal task-id namespace of every other home untouched.
+# files leave the equal task-id namespace of every other home untouched. Spawn
+# records the exact tasktmp path, so derive the sibling launch namespace from it
+# rather than assuming /tmp; pre-tasktmp records keep the historical fallback.
+SPAWN_TMP_BASE="/tmp"
+case "$TASK_TMP" in
+  */"fm-$ID")
+    SPAWN_TMP_BASE=${TASK_TMP%"/fm-$ID"}
+    [ -n "$SPAWN_TMP_BASE" ] || SPAWN_TMP_BASE="/tmp"
+    ;;
+esac
 teardown_launch_home_token() {
   local home=$1 root hash
   root=$(cd "$home" 2>/dev/null && pwd -P) || root=$home
@@ -3850,7 +3859,7 @@ teardown_launch_home_token() {
 }
 LAUNCH_HOME_TOKEN=$(teardown_launch_home_token "$FM_HOME") || LAUNCH_HOME_TOKEN=
 if [ -n "$LAUNCH_HOME_TOKEN" ]; then
-  rm -rf "/tmp/fm-$ID+$LAUNCH_HOME_TOKEN"
+  rm -rf "$SPAWN_TMP_BASE/fm-$ID+$LAUNCH_HOME_TOKEN"
 fi
 remove_pr_poll_artifacts "$STATE" "$ID" || exit 1
 retire_busy_state "$STATE" "$ID" "$BUSY_GEN" || exit 1

@@ -4662,17 +4662,33 @@ agy)
   ;;
 esac
 
-# Per-task temp root: /tmp/fm-<id>/ with Go's build temp nested at gotmp/. Go won't
-# create GOTMPDIR, so mkdir before it is used; fm-teardown removes the whole root.
-# Nested (not a bare /tmp/fm-<id>/gotmp) so other per-task temp can live alongside
-# later, and teardown cleans one deterministic path. GOTMPDIR (not TMPDIR) is the
-# targeted knob: TMPDIR is too broad (affects every program's temp, not just Go's).
-# The root is private (0700) because its path is predictable under a shared
-# /tmp: a root that already exists is reused only as a real directory owned by
-# this user and writable by nobody else, then tightened, so no other local user
-# can plant or swap a file in it. The staged launch command lives in a sibling
-# directory namespaced by home identity, not in this shared per-id root.
-TASK_TMP="/tmp/fm-$ID"
+# Per-task temp root: <TMPDIR>/fm-<id>/ with Go's build temp nested at gotmp/.
+# Go won't create GOTMPDIR, so mkdir before it is used; fm-teardown removes the
+# whole root. Nested (not a bare <TMPDIR>/fm-<id>/gotmp) so other per-task temp
+# can live alongside later, and teardown cleans one deterministic path.
+# GOTMPDIR (not TMPDIR) is the targeted knob: TMPDIR is too broad (affects
+# every program's temp, not just Go's). The base honors TMPDIR so a home under
+# /tmp pressure or quota can stage on another filesystem without changing the
+# worker contract. The root is private (0700) because its path is predictable
+# under a shared temp base: a root that already exists is reused only as a real
+# directory owned by this user and writable by nobody else, then tightened, so
+# no other local user can plant or swap a file in it. The staged launch command
+# lives in a sibling directory namespaced by home identity, not in this shared
+# per-id root.
+SPAWN_TMP_BASE=${TMPDIR:-/tmp}
+case "$SPAWN_TMP_BASE" in
+  /*) ;;
+  *)
+    echo "error: TMPDIR for task temp staging must be an absolute path, got ${SPAWN_TMP_BASE:-<empty>}" >&2
+    exit 1
+    ;;
+esac
+if [ ! -d "$SPAWN_TMP_BASE" ] || [ ! -w "$SPAWN_TMP_BASE" ]; then
+  echo "error: task temp staging base $SPAWN_TMP_BASE is not a writable directory; fix TMPDIR, then retry" >&2
+  exit 1
+fi
+SPAWN_TMP_BASE=$(cd "$SPAWN_TMP_BASE" && pwd -P)
+TASK_TMP="$SPAWN_TMP_BASE/fm-$ID"
 if ! (umask 077 && mkdir "$TASK_TMP") 2>/dev/null; then
   if [ -L "$TASK_TMP" ] || [ ! -d "$TASK_TMP" ] || [ ! -O "$TASK_TMP" ] ||
     [ -n "$(find "$TASK_TMP" -prune \( -perm -g=w -o -perm -o=w \) -print 2>/dev/null)" ] ||
@@ -5727,7 +5743,7 @@ fi
 case "$SPAWN_GEN" in
   *[!A-Za-z0-9.]*|'') echo "error: spawn incarnation token is not a usable launch-file nonce" >&2; exit 1 ;;
 esac
-LAUNCH_DIR="/tmp/fm-$ID+$LAUNCH_HOME_TOKEN"
+LAUNCH_DIR="$SPAWN_TMP_BASE/fm-$ID+$LAUNCH_HOME_TOKEN"
 if ! (umask 077 && mkdir "$LAUNCH_DIR") 2>/dev/null; then
   if [ -L "$LAUNCH_DIR" ] || [ ! -d "$LAUNCH_DIR" ] || [ ! -O "$LAUNCH_DIR" ] ||
     [ -n "$(find "$LAUNCH_DIR" -prune \( -perm -g=w -o -perm -o=w \) -print 2>/dev/null)" ] ||
