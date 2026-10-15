@@ -277,7 +277,7 @@ run_spawn() {
     FM_FAKE_TMUX_CALL_LOG="$case_dir/tmux-calls.log" \
     FM_FAKE_BRIEF_REAL="$(cd "$home/data/$id" && pwd -P)/launch-brief.md" \
     FM_KIMI_READY_POLLS="${FM_KIMI_READY_POLLS:-2}" FM_KIMI_DELIVERY_POLLS=2 FM_KIMI_POLL_INTERVAL=0 \
-    PATH="$fakebin:$BASE_PATH" \
+    PATH="$fakebin:$BASE_PATH" TMPDIR="${TMPDIR:-/tmp}" \
     "$SPAWN" "$id" "$proj" --harness kimi --mode no-mistakes --yolo off "$@" 2>&1
 }
 
@@ -355,8 +355,9 @@ path_mode() {
 }
 
 kimi_launch_dir() {
-  local id=$1 home=$2 root hash
+  local id=$1 home=$2 base=${3:-${TMPDIR:-/tmp}} root hash
   root=$(cd "$home" 2>/dev/null && pwd -P) || root=$home
+  base=$(cd "$base" && pwd -P) || fail "test needs an existing TMPDIR base: $base"
   if command -v shasum >/dev/null 2>&1; then
     hash=$(printf '%s' "$root" | shasum -a 256 | awk '{print $1}')
   elif command -v sha256sum >/dev/null 2>&1; then
@@ -364,12 +365,12 @@ kimi_launch_dir() {
   else
     fail "test needs shasum or sha256sum"
   fi
-  printf '/tmp/fm-%s+%s' "$id" "$hash"
+  printf '%s/fm-%s+%s' "$base" "$id" "$hash"
 }
 
 kimi_typed_launch_file() {
   local log=$1 src
-  src=$(grep -o "\. '/tmp/fm-[^']*'" "$log" | tail -1)
+  src=$(grep -o "\. '/[^']*/fm-[^']*'" "$log" | tail -1)
   src=${src#". '"}
   src=${src%"'"}
   [ -n "$src" ] || fail "spawn did not type a staged launch source line"
@@ -436,6 +437,45 @@ test_kimi_spawn_refuses_shared_task_temp_root() {
     || fail "kimi spawn did not type a short line sourcing its namespaced launch command"
   rm -rf "$task_tmp" "$launch_dir"
   pass "fm-spawn: unsafe task roots are refused, owned roots are tightened, and launch files stay unique and 0600"
+}
+
+test_kimi_spawn_honors_tmpdir_for_task_and_launch_roots() {
+  local id rec out rc tmp_base task_tmp launch_dir launch_file meta
+  id="kimi-tmpdir-z1-$$"
+  tmp_base="$TMP_ROOT/tmpdir-$id"
+  mkdir -p "$tmp_base"
+  task_tmp="$tmp_base/fm-$id"
+  KIMI_RUNTIME_TASK_TMP=$task_tmp
+  rec=$(make_spawn_case tmpdir "$id")
+  read_spawn_record "$rec"
+  launch_dir=$(kimi_launch_dir "$id" "$HOME_DIR" "$tmp_base")
+  KIMI_RUNTIME_LAUNCH_DIR=$launch_dir
+
+  out=$(TMPDIR="$tmp_base" run_spawn \
+    "$CASE_DIR" "$HOME_DIR" "$PROJ_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id")
+  rc=$?
+  expect_code 0 "$rc" "kimi spawn should honor a disk-backed TMPDIR: $out"
+  meta="$HOME_DIR/state/$id.meta"
+  assert_grep "tasktmp=$task_tmp" "$meta" "kimi meta did not record the TMPDIR-backed task root"
+  assert_present "$task_tmp/gotmp" "kimi spawn did not create gotmp under TMPDIR"
+  launch_file=$(kimi_typed_launch_file "$CASE_DIR/tmux-calls.log")
+  case "$launch_file" in
+    "$launch_dir"/launch.*) ;;
+    *) fail "kimi spawn typed a launch path outside TMPDIR's home namespace: $launch_file" ;;
+  esac
+  [ "$(path_mode "$task_tmp")" = 700 ] \
+    || fail "kimi spawn left its TMPDIR task root readable by others"
+  [ "$(path_mode "$launch_dir")" = 700 ] \
+    || fail "kimi spawn left its TMPDIR launch directory readable by others"
+  [ "$(path_mode "$launch_file")" = 600 ] \
+    || fail "kimi spawn staged its TMPDIR launch command without mode 0600"
+  assert_grep "export GOTMPDIR=$task_tmp/gotmp" "$CASE_DIR/tmux-calls.log" \
+    "kimi spawn did not export the TMPDIR-backed Go temp directory"
+  assert_absent "/tmp/fm-$id" "kimi spawn still created the shared /tmp task root"
+  rm -rf "$task_tmp" "$launch_dir"
+  KIMI_RUNTIME_TASK_TMP=
+  KIMI_RUNTIME_LAUNCH_DIR=
+  pass "fm-spawn: task and staged launch roots honor TMPDIR"
 }
 
 test_kimi_hook_install_is_surgical_idempotent_and_removable() {
@@ -1133,6 +1173,7 @@ test_kimi_hook_fails_closed_on_missing_malformed_or_partial_config
 test_kimi_hook_install_refuses_without_jq
 test_kimi_launch_then_send_is_verified
 test_kimi_spawn_refuses_shared_task_temp_root
+test_kimi_spawn_honors_tmpdir_for_task_and_launch_roots
 test_kimi_hook_is_silent_and_requires_registered_workspace_token
 test_kimi_spawn_refuses_unsafe_global_config_before_pane_creation
 test_kimi_teardown_removes_pointer_and_registry_token
