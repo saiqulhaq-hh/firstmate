@@ -1,0 +1,1 @@
+ok - fm-teardown: a pool slot claimed by another task is left alone while the task's own cleanup finishes

@@ -1,0 +1,3 @@
+ok - teardown leaves opencode's busy plugin in the returned pool worktree as on main
+not ok - local-default-reachability: teardown should succeed when the local default branch holds the work: expected exit 0, got 1
+base_exit=1

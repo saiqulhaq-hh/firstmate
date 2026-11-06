@@ -1,0 +1,7 @@
+ok - teardown leaves opencode's busy plugin in the returned pool worktree as on main
+ok - local default reachability applies only to tasks targeting the default branch
+ok - local-default teardown records landing evidence for every ship mode
+ok - a hung global lsof census refuses teardown before removal
+ok - bounded census reaps a TERM-ignoring inherited-output descendant
+ok - non-GNU timeout falls through with timeout and signal failures preserved
+ok - explicit Bash timeout override wins GNU-only automatic selection

@@ -1,0 +1,50 @@
+Live fm-teardown hung-census validation using real tmux, git, tasks-axi, and treehouse with a disposable TERM-resistant lsof fault injector.
+exit=1 elapsed_seconds=2
+-- stdout --
+-- stderr --
+fm-gate-refuse: gate agent lifecycle permitted only against lab home /tmp/fm-lab.So4QGZ/home
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  WATCHER DOWN - SUPERVISION IS OFF
+●  1 task(s) in flight, but no live watcher process holds this home lock (last beat: 1s ago).
+●  Trust the emitted supervision protocol for this harness; do not use shell & for watcher repair.
+●  This is a supervision warning only; the guarded operation WILL still run.
+●  repair a missing or failed watcher cycle with the Pi tool fm_watch_arm_pi, or restart Pi with -e /home/chucky/.no-mistakes/worktrees/9bde5da36f09/01M6S6DVQ8CMMDJ0BCRH0ZF13G/.pi/extensions/fm-primary-turnend-guard.ts -e /home/chucky/.no-mistakes/worktrees/9bde5da36f09/01M6S6DVQ8CMMDJ0BCRH0ZF13G/.pi/extensions/fm-primary-pi-watch.ts if the extensions are not loaded.
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+REFUSED: cannot determine leaked processes under /tmp/fm-lab.So4QGZ/pool-root/.treehouse/project-fc4e4c/1/project for hung-census (lsof failed); preserving the worktree/tasktmp for manual inspection or retry.
+-- lsof signal log --
+term
+-- backlog item --
+task:
+  id: hung-census
+  title: hung census live scenario
+  state: in_flight
+  blocked: no
+  blocked_by: none
+  held: no
+  hold_reason: "-"
+  hold_kind: "-"
+  hold_until: "-"
+  kind: ship
+  repo: "-"
+  priority: "-"
+  created: 2026-11-07
+  closed: "-"
+  deps: none
+  links: none
+  body: ""
+-- task record --
+window=primary:fm-hung-census
+endpoint_task_id=hung-census
+worktree=/tmp/fm-lab.So4QGZ/pool-root/.treehouse/project-fc4e4c/1/project
+project=/tmp/fm-lab.So4QGZ/project
+branch=fm/hung-census
+kind=ship
+mode=direct-PR
+spawn_gen=live-validation-hung-census
+-- treehouse status --
+base  main  (configured)
+1     leased       /tmp/fm-lab.So4QGZ/pool-root/.treehouse/project-fc4e4c/1/project  [fm/hung-census]  (held by hung-census)
+                   bash (661501), sleep (661519)
+-- tmux windows --
+01M6S6DVQ8CMMDJ0BCRH0ZF13G
+fm-hung-census

@@ -1,0 +1,199 @@
+Live fm-teardown validation using real tmux, lsof, git, tasks-axi, and treehouse.
+
+=== local-main commit permits cleanup and records evidence ===
+exit=0
+-- stdout --
+🌳 Worktree returned to pool.
+/tmp/fm-lab.AkS0LT/project: skipped: no origin remote
+teardown local-main-landed complete (window primary:fm-local-main-landed, worktree /tmp/fm-lab.AkS0LT/pool-root/.treehouse/project-3b5d69/1/project)
+Backlog: local-main-landed is closed in /tmp/fm-lab.AkS0LT/home/data/backlog.md. Run bin/fm-tasks-axi.sh ready for dependency-cleared candidates, check date gates, and dispatch only work whose blockers are gone and date is due.
+-- stderr --
+fm-gate-refuse: gate agent lifecycle permitted only against lab home /tmp/fm-lab.AkS0LT/home
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  WATCHER DOWN - SUPERVISION IS OFF
+●  1 task(s) in flight, but no live watcher process holds this home lock (last beat: 2s ago).
+●  Trust the emitted supervision protocol for this harness; do not use shell & for watcher repair.
+●  This is a supervision warning only; the guarded operation WILL still run.
+●  repair a missing or failed watcher cycle with the Pi tool fm_watch_arm_pi, or restart Pi with -e /home/chucky/.no-mistakes/worktrees/9bde5da36f09/01M6S6DVQ8CMMDJ0BCRH0ZF13G/.pi/extensions/fm-primary-turnend-guard.ts -e /home/chucky/.no-mistakes/worktrees/9bde5da36f09/01M6S6DVQ8CMMDJ0BCRH0ZF13G/.pi/extensions/fm-primary-pi-watch.ts if the extensions are not loaded.
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+teardown: reaping leaked worktree process(es) for local-main-landed: 595899 595907
+-- backlog item --
+task:
+  id: local-main-landed
+  title: live cleanup scenario
+  state: done
+  blocked: no
+  blocked_by: none
+  held: no
+  hold_reason: "-"
+  hold_kind: "-"
+  hold_until: "-"
+  kind: ship
+  repo: "-"
+  priority: "-"
+  created: "-"
+  closed: 2026-11-07
+  deps: none
+  links: none
+  body: local main
+-- task record --
+absent
+-- treehouse status --
+base  main  (configured)
+1     available    /tmp/fm-lab.AkS0LT/pool-root/.treehouse/project-3b5d69/1/project  (detached)
+-- tmux windows --
+01M6S6DVQ8CMMDJ0BCRH0ZF13G
+
+=== commit absent from local main is refused and preserved ===
+exit=1
+-- stdout --
+-- stderr --
+fm-gate-refuse: gate agent lifecycle permitted only against lab home /tmp/fm-lab.cK7bfB/home
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  WATCHER DOWN - SUPERVISION IS OFF
+●  1 task(s) in flight, but no live watcher process holds this home lock (last beat: 2s ago).
+●  Trust the emitted supervision protocol for this harness; do not use shell & for watcher repair.
+●  This is a supervision warning only; the guarded operation WILL still run.
+●  repair a missing or failed watcher cycle with the Pi tool fm_watch_arm_pi, or restart Pi with -e /home/chucky/.no-mistakes/worktrees/9bde5da36f09/01M6S6DVQ8CMMDJ0BCRH0ZF13G/.pi/extensions/fm-primary-turnend-guard.ts -e /home/chucky/.no-mistakes/worktrees/9bde5da36f09/01M6S6DVQ8CMMDJ0BCRH0ZF13G/.pi/extensions/fm-primary-pi-watch.ts if the extensions are not loaded.
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+REFUSED: worktree /tmp/fm-lab.cK7bfB/pool-root/.treehouse/project-03bf40/1/project has work not on any remote and not landed.
+unpushed commits:
+7ea854a add landed content
+0c69a58 baseline
+Push the branch, land its PR, or get the captain's explicit OK to discard, then --force.
+-- backlog item --
+task:
+  id: local-main-unlanded
+  title: live cleanup scenario
+  state: in_flight
+  blocked: no
+  blocked_by: none
+  held: no
+  hold_reason: "-"
+  hold_kind: "-"
+  hold_until: "-"
+  kind: ship
+  repo: "-"
+  priority: "-"
+  created: 2026-11-07
+  closed: "-"
+  deps: none
+  links: none
+  body: ""
+-- task record --
+window=primary:fm-local-main-unlanded
+endpoint_task_id=local-main-unlanded
+worktree=/tmp/fm-lab.cK7bfB/pool-root/.treehouse/project-03bf40/1/project
+project=/tmp/fm-lab.cK7bfB/project
+branch=fm/local-main-unlanded
+kind=ship
+mode=direct-PR
+spawn_gen=live-validation-local-main-unlanded
+-- treehouse status --
+base  main  (configured)
+1     leased       /tmp/fm-lab.cK7bfB/pool-root/.treehouse/project-03bf40/1/project  [fm/local-main-unlanded]  (held by local-main-unlanded)
+                   bash (600869), sleep (600877)
+-- tmux windows --
+01M6S6DVQ8CMMDJ0BCRH0ZF13G
+fm-local-main-unlanded
+
+=== local main cannot satisfy an explicit release target ===
+exit=1
+-- stdout --
+-- stderr --
+fm-gate-refuse: gate agent lifecycle permitted only against lab home /tmp/fm-lab.I6M49S/home
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  WATCHER DOWN - SUPERVISION IS OFF
+●  1 task(s) in flight, but no live watcher process holds this home lock (last beat: 2s ago).
+●  Trust the emitted supervision protocol for this harness; do not use shell & for watcher repair.
+●  This is a supervision warning only; the guarded operation WILL still run.
+●  repair a missing or failed watcher cycle with the Pi tool fm_watch_arm_pi, or restart Pi with -e /home/chucky/.no-mistakes/worktrees/9bde5da36f09/01M6S6DVQ8CMMDJ0BCRH0ZF13G/.pi/extensions/fm-primary-turnend-guard.ts -e /home/chucky/.no-mistakes/worktrees/9bde5da36f09/01M6S6DVQ8CMMDJ0BCRH0ZF13G/.pi/extensions/fm-primary-pi-watch.ts if the extensions are not loaded.
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+REFUSED: worktree /tmp/fm-lab.I6M49S/pool-root/.treehouse/project-f74302/1/project has work not on any remote and not landed.
+unpushed commits:
+68b5c20 add landed content
+820841e baseline
+Push the branch, land its PR, or get the captain's explicit OK to discard, then --force.
+-- backlog item --
+task:
+  id: wrong-target
+  title: live cleanup scenario
+  state: in_flight
+  blocked: no
+  blocked_by: none
+  held: no
+  hold_reason: "-"
+  hold_kind: "-"
+  hold_until: "-"
+  kind: ship
+  repo: "-"
+  priority: "-"
+  created: 2026-11-07
+  closed: "-"
+  deps: none
+  links: none
+  body: ""
+-- task record --
+window=primary:fm-wrong-target
+endpoint_task_id=wrong-target
+worktree=/tmp/fm-lab.I6M49S/pool-root/.treehouse/project-f74302/1/project
+project=/tmp/fm-lab.I6M49S/project
+branch=fm/wrong-target
+kind=ship
+mode=direct-PR
+spawn_gen=live-validation-wrong-target
+base_branch=release
+-- treehouse status --
+base  main  (configured)
+1     leased       /tmp/fm-lab.I6M49S/pool-root/.treehouse/project-f74302/1/project  [fm/wrong-target]  (held by wrong-target)
+                   bash (606643), sleep (606653)
+-- tmux windows --
+01M6S6DVQ8CMMDJ0BCRH0ZF13G
+fm-wrong-target
+
+=== reassigned slot is untouched and cannot fabricate local-main evidence ===
+exit=0
+-- stdout --
+/tmp/fm-lab.h4b7uW/project: skipped: no origin remote
+teardown stale-task complete (window primary:fm-stale-task; pool slot /tmp/fm-lab.h4b7uW/pool-root/.treehouse/project-557768/1/project left to task claimant-task (home /tmp/fm-lab.h4b7uW/claimant-home), which it was reassigned to)
+Backlog: stale-task is closed in /tmp/fm-lab.h4b7uW/home/data/backlog.md. Run bin/fm-tasks-axi.sh ready for dependency-cleared candidates, check date gates, and dispatch only work whose blockers are gone and date is due.
+-- stderr --
+fm-gate-refuse: gate agent lifecycle permitted only against lab home /tmp/fm-lab.h4b7uW/home
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  WATCHER DOWN - SUPERVISION IS OFF
+●  1 task(s) in flight, but no live watcher process holds this home lock (last beat: 2s ago).
+●  Trust the emitted supervision protocol for this harness; do not use shell & for watcher repair.
+●  This is a supervision warning only; the guarded operation WILL still run.
+●  repair a missing or failed watcher cycle with the Pi tool fm_watch_arm_pi, or restart Pi with -e /home/chucky/.no-mistakes/worktrees/9bde5da36f09/01M6S6DVQ8CMMDJ0BCRH0ZF13G/.pi/extensions/fm-primary-turnend-guard.ts -e /home/chucky/.no-mistakes/worktrees/9bde5da36f09/01M6S6DVQ8CMMDJ0BCRH0ZF13G/.pi/extensions/fm-primary-pi-watch.ts if the extensions are not loaded.
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+warning: task stale-task's recorded worktree /tmp/fm-lab.h4b7uW/pool-root/.treehouse/project-557768/1/project was reassigned to task claimant-task (home /tmp/fm-lab.h4b7uW/claimant-home), which claimed that pool slot after this record was written; that slot is no longer stale-task's, so its processes, copy, and claim are left untouched and only stale-task's own cleanup runs.
+-- backlog item --
+task:
+  id: stale-task
+  title: live cleanup scenario
+  state: done
+  blocked: no
+  blocked_by: none
+  held: no
+  hold_reason: "-"
+  hold_kind: "-"
+  hold_until: "-"
+  kind: ship
+  repo: "-"
+  priority: "-"
+  created: "-"
+  closed: 2026-11-07
+  deps: none
+  links: none
+  body: ""
+-- task record --
+absent
+-- treehouse status --
+base  main  (configured)
+1     leased       /tmp/fm-lab.h4b7uW/pool-root/.treehouse/project-557768/1/project  [fm/claimant-task]  (held by claimant-task)
+                   bash (610670), sleep (610697)
+-- tmux windows --
+01M6S6DVQ8CMMDJ0BCRH0ZF13G
+fm-claimant-task
+
+ALL LIVE SCENARIOS PASSED
